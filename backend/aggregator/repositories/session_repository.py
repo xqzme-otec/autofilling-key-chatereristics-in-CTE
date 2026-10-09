@@ -1,13 +1,19 @@
-"""Session storage.
+"""Session storage in Redis.
 
-The in-memory implementation is enough for a single aggregator instance. A database-backed
-repository (e.g. PostgreSQL) can replace it later by implementing the same protocol.
+Each session is one JSON value under `session:<id>`. The TTL is renewed on every read and
+write, so inactive sessions expire on their own.
 """
-import asyncio
-from collections import OrderedDict
+import json
+from dataclasses import asdict
+from datetime import datetime
 from typing import Protocol
 
-from aggregator.domain import Session
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+from aggregator.domain import AnalysisResult, Answer, Session, StorageUnavailableError
+
+KEY_PREFIX = "session:"
 
 
 class SessionRepository(Protocol):
@@ -16,24 +22,43 @@ class SessionRepository(Protocol):
     async def save(self, session: Session) -> None: ...
 
 
-class InMemorySessionRepository:
-    """LRU-bounded store: the least recently used session is evicted when the limit is reached."""
-
-    def __init__(self, max_sessions: int):
-        self._max = max_sessions
-        self._items: OrderedDict[str, Session] = OrderedDict()
-        self._lock = asyncio.Lock()
+class RedisSessionRepository:
+    def __init__(self, redis: Redis, ttl_s: int):
+        self._redis = redis
+        self._ttl_s = ttl_s
 
     async def get(self, session_id: str) -> Session | None:
-        async with self._lock:
-            session = self._items.get(session_id)
-            if session is not None:
-                self._items.move_to_end(session_id)
-            return session
+        try:
+            raw = await self._redis.getex(KEY_PREFIX + session_id, ex=self._ttl_s)
+        except RedisError as exc:
+            raise StorageUnavailableError(f"Session storage is unavailable: {exc}") from exc
+        return None if raw is None else _load(raw)
 
     async def save(self, session: Session) -> None:
-        async with self._lock:
-            self._items[session.id] = session
-            self._items.move_to_end(session.id)
-            while len(self._items) > self._max:
-                self._items.popitem(last=False)
+        try:
+            await self._redis.set(KEY_PREFIX + session.id, _dump(session), ex=self._ttl_s)
+        except RedisError as exc:
+            raise StorageUnavailableError(f"Session storage is unavailable: {exc}") from exc
+
+
+def _dump(session: Session) -> str:
+    return json.dumps({
+        "id": session.id,
+        "raw_text": session.raw_text,
+        "result": session.result.model_dump(mode="json", by_alias=True),
+        "answers": [asdict(a) for a in session.answers],
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+    }, ensure_ascii=False)
+
+
+def _load(raw: str | bytes) -> Session:
+    data = json.loads(raw)
+    return Session(
+        id=data["id"],
+        raw_text=data["raw_text"],
+        result=AnalysisResult.model_validate(data["result"]),
+        answers=[Answer(**a) for a in data["answers"]],
+        created_at=datetime.fromisoformat(data["created_at"]),
+        updated_at=datetime.fromisoformat(data["updated_at"]),
+    )

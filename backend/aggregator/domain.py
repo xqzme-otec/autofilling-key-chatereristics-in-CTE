@@ -108,8 +108,6 @@ def _now() -> datetime:
 class Session:
     id: str
     raw_text: str
-    text: str
-    tokens: list[dict] | None
     result: AnalysisResult
     answers: list[Answer] = field(default_factory=list)
     created_at: datetime = field(default_factory=_now)
@@ -158,3 +156,7 @@ class ModelTimeoutError(DomainError):
 
 class ModelBadResponseError(DomainError):
     code = "model_bad_response"
+
+
+class StorageUnavailableError(DomainError):
+    code = "storage_unavailable"

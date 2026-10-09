@@ -16,6 +16,7 @@ from aggregator.domain import (
     ModelUnavailableError,
     NoPendingQuestionError,
     SessionNotFoundError,
+    StorageUnavailableError,
 )
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ STATUS_BY_ERROR: dict[type[DomainError], int] = {
     ModelBadResponseError: 502,
     ModelUnavailableError: 503,
     ModelTimeoutError: 504,
+    StorageUnavailableError: 503,
 }
 
 

@@ -12,24 +12,21 @@ from aggregator.domain import (
     ModelUnavailableError,
 )
 
-ANALYZE_PATH = "/analyze"
-
 
 class ModelRepository(Protocol):
-    async def analyze(self, text: str, answers: list[Answer], tokens: list[dict] | None) -> AnalysisResult: ...
+    async def analyze(self, text: str, answers: list[Answer]) -> AnalysisResult: ...
 
 
 class HttpModelRepository:
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(self, client: httpx.AsyncClient, analyze_path: str):
         self._client = client
+        self._analyze_path = analyze_path
 
-    async def analyze(self, text: str, answers: list[Answer], tokens: list[dict] | None) -> AnalysisResult:
-        payload: dict = {"raw": text, "answers": [a.to_model() for a in answers]}
-        if tokens is not None:
-            payload["tokens"] = tokens
+    async def analyze(self, text: str, answers: list[Answer]) -> AnalysisResult:
+        payload = {"raw": text, "answers": [a.to_model() for a in answers]}
 
         try:
-            response = await self._client.post(ANALYZE_PATH, json=payload)
+            response = await self._client.post(self._analyze_path, json=payload)
         except httpx.TimeoutException as exc:
             raise ModelTimeoutError("Model service did not respond in time") from exc
         except httpx.TransportError as exc:

@@ -1,11 +1,10 @@
-"""Analysis dialog: preprocess text -> ask the model -> keep the session for follow-up answers.
+"""Analysis dialog: validate text -> ask the model -> keep the session for follow-up answers.
 
 The model service is stateless: every call receives the full text and all answers given so far.
 The session keeps them so the frontend only sends the next answer.
 """
 import logging
 import uuid
-from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -17,7 +16,6 @@ from aggregator.domain import (
     Session,
     SessionNotFoundError,
 )
-from aggregator.preprocessing import PreprocessedText, preprocess
 from aggregator.repositories import ModelRepository, SessionRepository
 
 log = logging.getLogger(__name__)
@@ -29,12 +27,10 @@ class AnalysisService:
         sessions: SessionRepository,
         model: ModelRepository,
         max_text_length: int,
-        preprocessor: Callable[[str], PreprocessedText] = preprocess,
     ):
         self._sessions = sessions
         self._model = model
         self._max_text_length = max_text_length
-        self._preprocess = preprocessor
 
     async def start(self, raw_text: str) -> Session:
         if not raw_text.strip():
@@ -42,18 +38,8 @@ class AnalysisService:
         if len(raw_text) > self._max_text_length:
             raise InvalidTextError(f"Text is longer than {self._max_text_length} characters")
 
-        prepared = self._preprocess(raw_text)
-        if not prepared.text.strip():
-            raise InvalidTextError("Text is empty after preprocessing")
-
-        result = await self._model.analyze(prepared.text, [], prepared.tokens)
-        session = Session(
-            id=str(uuid.uuid4()),
-            raw_text=raw_text,
-            text=prepared.text,
-            tokens=prepared.tokens,
-            result=result,
-        )
+        result = await self._model.analyze(raw_text, [])
+        session = Session(id=str(uuid.uuid4()), raw_text=raw_text, result=result)
         await self._sessions.save(session)
         log.info("session %s started: status=%s candidates=%d",
                  session.id, session.status.value, result.candidates_total)
@@ -66,7 +52,7 @@ class AnalysisService:
         answer = self._to_answer(session, value)
 
         answers = [*session.answers, answer]
-        result = await self._model.analyze(session.text, answers, session.tokens)
+        result = await self._model.analyze(session.raw_text, answers)
         updated = replace(session, answers=answers, result=result, updated_at=datetime.now(timezone.utc))
         await self._sessions.save(updated)
         log.info("session %s answered %s: status=%s candidates=%d",

@@ -116,6 +116,15 @@ def test_answer_after_done_is_conflict(client):
     assert response.json()["error"]["code"] == "no_pending_question"
 
 
+def test_storage_unavailable(client, redis_server):
+    redis_server.connected = False
+
+    response = client.post("/api/v1/analyze", json={"text": TEXT})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "storage_unavailable"
+
+
 def test_unknown_route_uses_error_format(client):
     response = client.get("/api/v1/nope")
 

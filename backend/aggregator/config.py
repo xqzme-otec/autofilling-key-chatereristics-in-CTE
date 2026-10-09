@@ -12,7 +12,8 @@ class Settings:
     model_service_url: str = "http://localhost:8001"
     model_timeout_s: float = 30.0
     max_text_length: int = 2000
-    max_sessions: int = 10_000
+    redis_url: str = "redis://localhost:6379/0"
+    session_ttl_s: int = 3600
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
     @classmethod
@@ -21,6 +22,7 @@ class Settings:
             model_service_url=os.getenv("MODEL_SERVICE_URL", cls.model_service_url),
             model_timeout_s=float(os.getenv("MODEL_TIMEOUT_S", cls.model_timeout_s)),
             max_text_length=int(os.getenv("MAX_TEXT_LENGTH", cls.max_text_length)),
-            max_sessions=int(os.getenv("MAX_SESSIONS", cls.max_sessions)),
+            redis_url=os.getenv("REDIS_URL", cls.redis_url),
+            session_ttl_s=int(os.getenv("SESSION_TTL_S", cls.session_ttl_s)),
             cors_origins=_csv(os.getenv("CORS_ORIGINS", "*")),
         )

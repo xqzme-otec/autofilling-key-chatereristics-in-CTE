@@ -10,12 +10,15 @@
 ```
 Frontend ──HTTP/JSON──▶ Aggregator (backend/, :8000) ──HTTP/JSON──▶ Model service (:8001)
                          · валидация входа                          · ml.pipeline.Pipeline.analyze()
-                         · предобработка текста                     · без состояния
-                         · сессии диалога
+                         · сессии диалога                           · предобработка, исправления
+                                   │                                · без состояния
+                                   ▼
+                              Redis (:6379)
 ```
 
-**Агрегатор** — единственная точка входа для фронтенда. Принимает свободный текст, делает базовую
-предобработку, отправляет запрос в модельный сервис и хранит сессию уточняющего диалога.
+**Агрегатор** — единственная точка входа для фронтенда. Проверяет вход, пересылает текст и ответы
+пользователя в модельный сервис и хранит сессию уточняющего диалога. Текст не изменяет:
+нормализацию и исправления делает сам пайплайн.
 
 **Модельный сервис** не хранит состояние: в каждый вызов передаётся весь текст и все ответы
 пользователя, данные к этому моменту. Агрегатор хранит их в сессии, поэтому фронтенд присылает
@@ -27,23 +30,19 @@ Frontend ──HTTP/JSON──▶ Aggregator (backend/, :8000) ──HTTP/JSON�
 
 ```
 backend/aggregator/
-  handlers/       HTTP: маршруты, схемы запросов/ответов, единый формат ошибок
-  services/       сценарий диалога: предобработка → модель → сессия; проверка ответа
-  repositories/   сессии (in-memory, LRU) и шлюз к модельному сервису (httpx)
+  handlers/       HTTP-обработчики, схемы запросов/ответов, единый формат ошибок
+  services/       сценарий диалога: проверка текста → модель → сессия; проверка ответа
+  repositories/   сессии (Redis) и шлюз к модельному сервису (httpx)
   domain.py       сущности (Session, Answer, AnalysisResult) и доменные ошибки
-  preprocessing.py  предобработка текста — ЗАГЛУШКА, реализация будет позже
   config.py       настройки из переменных окружения
-  main.py         сборка приложения
+  main.py         сборка приложения: все HTTP-пути (маршруты API и путь модели) задаются в create_app()
 ```
 
 Зависимости направлены только вниз: `handlers → services → repositories → domain`.
 
-- **База данных не используется.** Сессии лежат в памяти процесса (`InMemorySessionRepository`)
-  и теряются при перезапуске. Чтобы перейти на PostgreSQL, достаточно реализовать протокол
-  `SessionRepository` (`get`, `save`) и подставить его в `main.py`.
-- **Предобработка** — функция `preprocess(text) -> PreprocessedText(text, tokens)` в
-  `aggregator/preprocessing.py`. Сейчас возвращает текст без изменений. `tokens` (необязательно)
-  передаются в модель в формате `{text, lemma, span, known}`.
+- **Сессии хранятся в Redis** (`RedisSessionRepository`): одна JSON-строка под ключом
+  `session:<id>`. TTL — `SESSION_TTL_S`, продлевается при каждом чтении и записи; неактивные
+  сессии удаляются сами. Агрегатор при старте проверяет Redis (`PING`) и не запускается без него.
 
 ---
 
@@ -153,14 +152,15 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
 
 | HTTP | `code` | Когда |
 |---|---|---|
-| 404 | `session_not_found` | сессии нет (неверный id или вытеснена из памяти/перезапуск) — начать заново через `/analyze` |
+| 404 | `session_not_found` | сессии нет (неверный id или истёк TTL) — начать заново через `/analyze` |
 | 404 | `not_found` | несуществующий маршрут |
 | 409 | `no_pending_question` | в сессии нет вопроса (`next_step` = `null`) |
 | 422 | `validation_error` | тело запроса не соответствует схеме; подробности в `error.details` |
-| 422 | `invalid_text` | текст пустой (в т.ч. после предобработки) или слишком длинный |
+| 422 | `invalid_text` | текст пустой или слишком длинный |
 | 422 | `invalid_answer` | `value` не входит в `next_step.options` |
 | 502 | `model_bad_response` | модель вернула не-200 или ответ не в ожидаемом формате |
 | 503 | `model_unavailable` | модельный сервис недоступен |
+| 503 | `storage_unavailable` | Redis недоступен |
 | 504 | `model_timeout` | модель не ответила за `MODEL_TIMEOUT_S` |
 
 ---
@@ -182,16 +182,14 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
   "raw": "стл на металлическом каркасе",
   "answers": [
     {"type": "characteristic", "characteristic": "Наличие подлокотников", "value": "Нет"}
-  ],
-  "tokens": [{"text": "стл", "lemma": "стл", "span": [0, 3], "known": false}]
+  ]
 }
 ```
 
 | Поле | Описание |
 |---|---|
-| `raw` | текст после предобработки агрегатора |
+| `raw` | текст пользователя без изменений |
 | `answers` | все ответы пользователя по порядку; `[]` при первом запросе |
-| `tokens` | только если их вернула предобработка; иначе поле отсутствует и модель токенизирует сама |
 
 Ответ `200` — результат `Pipeline.analyze()` (см. [`ML.md`](../ML.md#формат-ответа)). Агрегатор
 требует обязательные поля `input`, `text`; для `next_step` — `type`, `message`, `options`.
@@ -206,7 +204,8 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
 | `MODEL_SERVICE_URL` | `http://localhost:8001` (в Docker — `http://model:8001`) | адрес модельного сервиса |
 | `MODEL_TIMEOUT_S` | `30` | таймаут запроса к модели, секунды |
 | `MAX_TEXT_LENGTH` | `2000` | максимальная длина текста |
-| `MAX_SESSIONS` | `10000` | сколько сессий держать в памяти; старые вытесняются (LRU) |
+| `REDIS_URL` | `redis://localhost:6379/0` (в Docker — `redis://redis:6379/0`) | адрес Redis для сессий |
+| `SESSION_TTL_S` | `3600` | сколько секунд хранится неактивная сессия |
 | `CORS_ORIGINS` | `*` | разрешённые origin фронтенда через запятую |
 
 ---
@@ -217,18 +216,19 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
 cd backend
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt          # Windows: .venv\Scripts\pip
-.venv/bin/python -m pytest                         # тесты агрегатора (модель подменена)
-MODEL_SERVICE_URL=http://localhost:8001 .venv/bin/uvicorn aggregator.main:app --port 8000
+.venv/bin/python -m pytest                         # тесты агрегатора (модель и Redis подменены)
+docker run -d --name ktru-redis -p 6379:6379 redis:7-alpine
+MODEL_SERVICE_URL=http://localhost:8001 REDIS_URL=redis://localhost:6379/0 \n  .venv/bin/uvicorn aggregator.main:app --port 8000
 ```
 
 Docker:
 
 ```bash
 docker build -t ktru-aggregator backend
-docker run -p 8000:8000 -e MODEL_SERVICE_URL=http://host.docker.internal:8001 ktru-aggregator
+docker run -p 8000:8000 -e MODEL_SERVICE_URL=http://host.docker.internal:8001 \n  -e REDIS_URL=redis://host.docker.internal:6379/0 ktru-aggregator
 ```
 
-Проверка (нужен запущенный модельный сервис):
+Проверка (нужны запущенные модельный сервис и Redis):
 
 ```bash
 curl -s localhost:8000/health

@@ -1,5 +1,6 @@
 import json
 
+import fakeredis
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -64,8 +65,14 @@ def fake_model() -> FakeModel:
 
 
 @pytest.fixture
-def client(fake_model):
-    settings = Settings(model_service_url="http://model", max_text_length=100, max_sessions=10)
-    app = create_app(settings, model_transport=httpx.MockTransport(fake_model))
+def redis_server() -> fakeredis.FakeServer:
+    return fakeredis.FakeServer()
+
+
+@pytest.fixture
+def client(fake_model, redis_server):
+    settings = Settings(model_service_url="http://model", max_text_length=100)
+    app = create_app(settings, model_transport=httpx.MockTransport(fake_model),
+                     redis=fakeredis.FakeAsyncRedis(server=redis_server, decode_responses=True))
     with TestClient(app) as c:
         yield c
