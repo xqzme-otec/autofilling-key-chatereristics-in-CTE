@@ -28,6 +28,18 @@ go.work.sum
 # env file
 .env
 
+# Python/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Source and generated datasets
+data/raw/
+data/processed/
+docs/reports/
+
 # Editor/IDE
+.DS_Store
 # .idea/
 # .vscode/
+data/processed/
