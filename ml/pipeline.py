@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Точка входа ML: analyze(запрос) -> готовый JSON для фронта.
 
 Вход (dict или просто строка):

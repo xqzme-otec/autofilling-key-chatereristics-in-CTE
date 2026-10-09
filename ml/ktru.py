@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Загрузка справочника КТРУ: data/processed/ktru.parquet (парсер ml/data/) или JSON временных данных."""
 import json
 from collections import Counter
@@ -66,6 +68,7 @@ def load_parquet(path: Path, active_only: bool = True, skip_templates: bool = Tr
         items.append({
             "code": r.code,
             "name": (r.name or "").strip(),
+            "description": (r.nsi_description or "").strip() if getattr(r, "nsi_description", None) else "",
             "okpd2": r.okpd2_code,
             "category": CATEGORY_RU.get(r.category, r.category),
             "unit": okeis[0]["name"] if okeis else None,
@@ -108,11 +111,13 @@ class KtruStore:
         self.vocab = self._build_vocab()
 
     def passage(self, item: dict) -> str:
-        """Текст позиции для эмбеддингов: название + характеристики со значениями."""
-        parts = [item["name"] + "."]
-        for ch in item["characteristics"]:
-            vals = ", ".join(format_value(v, ch["unit"]) for v in ch["values"])
-            parts.append(f"{ch['name']}: {vals}.")
+        """Текст позиции для эмбеддингов: название + описание + названия характеристик."""
+        parts = [f"Наименование: {item['name']}."]
+        if item.get("description"):
+            parts.append(f"Описание: {item['description']}.")
+        names = [ch["name"] for ch in item["characteristics"]]
+        if names:
+            parts.append("Характеристики: " + "; ".join(dict.fromkeys(names)) + ".")
         return " ".join(parts)
 
     def _build_vocab(self) -> Counter:
