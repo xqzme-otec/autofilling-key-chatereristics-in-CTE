@@ -1,0 +1,8 @@
+sentence-transformers>=5.0
+rapidfuzz>=3.0
+symspellpy>=6.7
+pymorphy3>=2.0
+numpy>=2.0
+pandas>=2.0
+pyarrow>=15.0
+pytest>=8.0

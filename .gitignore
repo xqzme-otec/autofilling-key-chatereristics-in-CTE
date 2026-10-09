@@ -28,6 +28,23 @@ go.work.sum
 # env file
 .env
 
+# Python/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Source and generated datasets
+data/raw/
+data/processed/*
+!data/processed/ktru.parquet
+docs/reports/
+
 # Editor/IDE
+.DS_Store
 # .idea/
 # .vscode/
+
+# ML: окружение, кэш эмбеддингов, сгенерированные тестовые запросы
+.venv/
+data/cache/
+eval/cases_ktru.jsonl
