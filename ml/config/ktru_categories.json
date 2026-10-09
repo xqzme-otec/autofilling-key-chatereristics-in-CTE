@@ -1,0 +1,18 @@
+{
+  "clothing": {
+    "okpd2_prefixes": ["14"],
+    "rubricator_prefixes": [],
+    "parent_prefixes": []
+  },
+  "furniture": {
+    "okpd2_prefixes": ["31"],
+    "rubricator_prefixes": [],
+    "parent_prefixes": []
+  },
+  "tools": {
+    "okpd2_prefixes": ["25.73", "28.24"],
+    "rubricator_prefixes": [],
+    "parent_prefixes": []
+  }
+}
+
