@@ -35,11 +35,11 @@ __pycache__/
 
 # Source and generated datasets
 data/raw/
-data/processed/
+data/processed/*
+!data/processed/ktru.parquet
 docs/reports/
 
 # Editor/IDE
 .DS_Store
 # .idea/
 # .vscode/
-data/processed/
