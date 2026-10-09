@@ -1,0 +1,155 @@
+[
+  {
+    "code": "31.01.11.150-MOCK0001",
+    "name": "Стул офисный",
+    "okpd2": "31.01.11.150",
+    "category": "мебель",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Наличие колесных опор", "required": true, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Наличие подлокотников", "required": true, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Материал обивки", "required": true, "unit": null, "values": [{"text": "Искусственная кожа"}, {"text": "Натуральная кожа"}, {"text": "Ткань"}, {"text": "Сетка"}]},
+      {"name": "Высота", "required": false, "unit": "Миллиметр", "values": [{"min": 800, "max": 1000}, {"min": 1000, "max": 1200}, {"min": 1200, "max": 1400}]}
+    ]
+  },
+  {
+    "code": "31.01.11.150-MOCK0002",
+    "name": "Кресло офисное руководителя",
+    "okpd2": "31.01.11.150",
+    "category": "мебель",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Наличие колесных опор", "required": true, "unit": null, "values": [{"text": "Да"}]},
+      {"name": "Наличие подлокотников", "required": true, "unit": null, "values": [{"text": "Да"}]},
+      {"name": "Материал обивки", "required": true, "unit": null, "values": [{"text": "Искусственная кожа"}, {"text": "Натуральная кожа"}]},
+      {"name": "Механизм качания", "required": false, "unit": null, "values": [{"text": "Топ-ган"}, {"text": "Мультиблок"}, {"text": "Пиастра"}]}
+    ]
+  },
+  {
+    "code": "31.01.12.160-MOCK0003",
+    "name": "Табурет",
+    "okpd2": "31.01.12.160",
+    "category": "мебель",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Материал каркаса", "required": true, "unit": null, "values": [{"text": "Металл"}, {"text": "Дерево"}, {"text": "Пластик"}]},
+      {"name": "Высота", "required": false, "unit": "Миллиметр", "values": [{"min": 400, "max": 500}, {"min": 500, "max": 800}]}
+    ]
+  },
+  {
+    "code": "31.01.12.110-MOCK0004",
+    "name": "Стол письменный",
+    "okpd2": "31.01.12.110",
+    "category": "мебель",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Материал столешницы", "required": true, "unit": null, "values": [{"text": "ЛДСП"}, {"text": "МДФ"}, {"text": "Массив дерева"}, {"text": "Стекло"}]},
+      {"name": "Наличие тумбы", "required": true, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Длина", "required": false, "unit": "Миллиметр", "values": [{"min": 800, "max": 1200}, {"min": 1200, "max": 1600}, {"min": 1600, "max": 2000}]}
+    ]
+  },
+  {
+    "code": "31.01.12.130-MOCK0005",
+    "name": "Шкаф для одежды",
+    "okpd2": "31.01.12.130",
+    "category": "мебель",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Материал корпуса", "required": true, "unit": null, "values": [{"text": "ЛДСП"}, {"text": "МДФ"}, {"text": "Металл"}]},
+      {"name": "Количество дверей", "required": true, "unit": "Штука", "values": [{"min": 1, "max": 1}, {"min": 2, "max": 2}, {"min": 3, "max": 4}]}
+    ]
+  },
+  {
+    "code": "25.73.30.141-MOCK0006",
+    "name": "Молоток",
+    "okpd2": "25.73.30.141",
+    "category": "инструменты",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Безынерционный", "required": false, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Длина рукоятки", "required": false, "unit": "Миллиметр", "values": [{"max": 100}, {"min": 100, "max": 300}, {"min": 300, "max": 500}, {"min": 500}]},
+      {"name": "Масса молотка", "required": false, "unit": "Килограмм", "values": [{"max": 0.4}, {"min": 0.4, "max": 0.8}, {"min": 0.8, "max": 1.6}, {"min": 1.6, "max": 2.5}, {"min": 2.5}]}
+    ]
+  },
+  {
+    "code": "25.73.30.150-MOCK0007",
+    "name": "Отвертка",
+    "okpd2": "25.73.30.150",
+    "category": "инструменты",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Тип шлица", "required": true, "unit": null, "values": [{"text": "Прямой"}, {"text": "Крестовой"}, {"text": "Шестигранный"}, {"text": "Звездочка"}]},
+      {"name": "Диэлектрическая", "required": false, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]}
+    ]
+  },
+  {
+    "code": "28.24.11.110-MOCK0008",
+    "name": "Дрель электрическая",
+    "okpd2": "28.24.11.110",
+    "category": "инструменты",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Тип питания", "required": true, "unit": null, "values": [{"text": "Сетевая"}, {"text": "Аккумуляторная"}]},
+      {"name": "Наличие функции удара", "required": true, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Мощность", "required": false, "unit": "Ватт", "values": [{"max": 500}, {"min": 500, "max": 800}, {"min": 800}]}
+    ]
+  },
+  {
+    "code": "25.73.30.160-MOCK0009",
+    "name": "Ключ гаечный",
+    "okpd2": "25.73.30.160",
+    "category": "инструменты",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Тип ключа", "required": true, "unit": null, "values": [{"text": "Рожковый"}, {"text": "Накидной"}, {"text": "Комбинированный"}]},
+      {"name": "Размер зева", "required": true, "unit": "Миллиметр", "values": [{"max": 10}, {"min": 10, "max": 19}, {"min": 19}]}
+    ]
+  },
+  {
+    "code": "14.12.30.131-MOCK0010",
+    "name": "Халат медицинский",
+    "okpd2": "14.12.30.131",
+    "category": "одежда",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Пол", "required": true, "unit": null, "values": [{"text": "Мужской"}, {"text": "Женский"}, {"text": "Унисекс"}]},
+      {"name": "Материал", "required": true, "unit": null, "values": [{"text": "Хлопок"}, {"text": "Смесовая ткань"}, {"text": "Полиэстер"}]},
+      {"name": "Длина рукава", "required": false, "unit": null, "values": [{"text": "Короткий"}, {"text": "Длинный"}]}
+    ]
+  },
+  {
+    "code": "14.12.11.000-MOCK0011",
+    "name": "Костюм рабочий",
+    "okpd2": "14.12.11.000",
+    "category": "одежда",
+    "unit": "Комплект",
+    "characteristics": [
+      {"name": "Сезонность", "required": true, "unit": null, "values": [{"text": "Летний"}, {"text": "Зимний"}, {"text": "Демисезонный"}]},
+      {"name": "Наличие светоотражающих элементов", "required": true, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Материал", "required": true, "unit": null, "values": [{"text": "Хлопок"}, {"text": "Смесовая ткань"}]}
+    ]
+  },
+  {
+    "code": "14.19.42.110-MOCK0012",
+    "name": "Перчатки рабочие",
+    "okpd2": "14.19.42.110",
+    "category": "одежда",
+    "unit": "Пара",
+    "characteristics": [
+      {"name": "Материал", "required": true, "unit": null, "values": [{"text": "Хлопок"}, {"text": "Натуральная кожа"}, {"text": "Нитрил"}, {"text": "Латекс"}]},
+      {"name": "Наличие ПВХ покрытия", "required": false, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]}
+    ]
+  },
+  {
+    "code": "14.13.21.120-MOCK0013",
+    "name": "Куртка утепленная",
+    "okpd2": "14.13.21.120",
+    "category": "одежда",
+    "unit": "Штука",
+    "characteristics": [
+      {"name": "Пол", "required": true, "unit": null, "values": [{"text": "Мужской"}, {"text": "Женский"}, {"text": "Унисекс"}]},
+      {"name": "Наличие капюшона", "required": true, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]},
+      {"name": "Наличие светоотражающих элементов", "required": false, "unit": null, "values": [{"text": "Да"}, {"text": "Нет"}]}
+    ]
+  }
+]

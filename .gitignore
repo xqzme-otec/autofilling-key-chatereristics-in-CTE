@@ -43,3 +43,8 @@ docs/reports/
 .DS_Store
 # .idea/
 # .vscode/
+
+# ML: окружение, кэш эмбеддингов, сгенерированные тестовые запросы
+.venv/
+data/cache/
+eval/cases_ktru.jsonl
