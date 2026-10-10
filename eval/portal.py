@@ -1,18 +1,18 @@
-"""Проверка на реальных карточках товаров (СТЕ) Портала поставщиков.
+"""Evaluation on real product cards (STE) of the supplier portal.
 
     .venv/bin/python -m eval.portal make     # data/raw/supplier_portal/*.xlsx → eval/cases_portal.jsonl
-    .venv/bin/python -m eval.portal run [-v] # отчёт
+    .venv/bin/python -m eval.portal run [-v] # report
 
-В выгрузках нет кода КТРУ, поэтому эталон грубый — категория файла (Инструменты/Мебель/Одежда).
-Запрос — название СТЕ (как пишут поставщики: бренды, модели, артикулы), во втором варианте —
-название + 2 характеристики из карточки. Метрики:
-  found        — товар найден в КТРУ (не «product_not_found»);
-  category_ok  — категория лучшего кандидата совпала с категорией файла (среди найденных);
-  narrowed     — дошли до кода или до уточняющего вопроса;
-  chars_avg    — сколько характеристик извлечено в среднем (КТРУ, Портал и новые);
-  errors_per_100 — ошибки (severity=error) на 100 запросов, кроме «не найден»: карточки реальные,
-                   поэтому это в основном ложные срабатывания или расхождения портала с КТРУ;
-  warnings_per_100 — предупреждения о подозрительных значениях.
+The exports have no KTRU code, so the reference is rough — the file category (Инструменты/Мебель/Одежда).
+The query is the STE name (as suppliers write it: brands, models, articles); the second variant is
+the name + 2 characteristics from the card. Metrics:
+  found        — the product is found in KTRU (not «product_not_found»);
+  category_ok  — the category of the best candidate matches the file category (among found ones);
+  narrowed     — reached a code or a clarifying question;
+  chars_avg    — average number of extracted characteristics (KTRU, portal and new);
+  errors_per_100 — errors (severity=error) per 100 queries, except «not found»: the cards are real,
+                   so these are mostly false positives or portal/KTRU discrepancies;
+  warnings_per_100 — warnings about suspicious values.
 """
 import argparse
 import json
@@ -30,7 +30,7 @@ JUNK_VALUE = re.compile(r"^(\(не задано\)|0(\.0+)?)(\s|$)")
 
 
 def parse_characteristics(raw: str) -> list[str]:
-    """«Вес 2.03000 кг | Мощность 10.80000 Вт» → ["Вес 2.03 кг", "Мощность 10.8 Вт"] без пустых значений."""
+    """«Вес 2.03000 кг | Мощность 10.80000 Вт» → ["Вес 2.03 кг", "Мощность 10.8 Вт"] without empty values."""
     out = []
     for part in str(raw or "").split("|"):
         part = re.sub(r"(\d+\.\d*?)0+(\s|$)", r"\1\2", part.strip()).replace(". ", " ").strip()

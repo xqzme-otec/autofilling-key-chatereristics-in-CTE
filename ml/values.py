@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-"""Перевод слов пользователя в текстовые характеристики КТРУ.
+"""User words → text KTRU characteristics.
 
 «на колесиках» → «Наличие колесных опор: Да», «кожзам» → «Материал обивки: Искусственная кожа».
 
-Текст режется на фрагменты по запятым/точкам, каждый фрагмент сопоставляется
-с характеристиками кандидатов КТРУ:
-  - Да/Нет характеристики («Наличие подлокотников») — по ключевым словам названия,
-    «без …» / «нет …» перед ключевым словом даёт «Нет»;
-  - списочные значения («Ткань», «Сетка») — точное/нечёткое (rapidfuzz) совпадение лемм
-    с учётом синонимов и обобщений («хлопок» → «Натуральная»), «без капюшона» → «Отсутствует»,
-    эмбеддинги — запасной вариант.
-Ошибка «несуществующее значение» — когда фрагмент называет характеристику
-(«материал бойка …»), а слово рядом не подходит ни к одному её допустимому значению.
+The text is split into fragments by commas/dots; each fragment is matched
+against the characteristics of the KTRU candidates:
+  - yes/no characteristics («Наличие подлокотников») — by the key words of the name,
+    «без …» / «нет …» before a key word gives «Нет»;
+  - list values («Ткань», «Сетка») — exact/fuzzy (rapidfuzz) lemma match
+    with synonyms and generalizations («хлопок» → «Натуральная»), «без капюшона» → «Отсутствует»,
+    embeddings as a fallback.
+A «nonexistent value» error is raised when a fragment names a characteristic
+(«материал бойка …») and the word next to it fits none of its allowed values.
 
-Числовые характеристики обрабатывает ml/units.py.
+Numeric characteristics are handled by ml/units.py.
 """
 import json
 import re
@@ -25,6 +25,7 @@ import numpy as np
 from rapidfuzz import fuzz, process
 
 from ml.ktru import KtruStore, is_bool_char, is_text_char
+from ml.sizes import is_letter_size_char
 from ml.text import main_noun, pos, tokenize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -41,26 +42,26 @@ PARTIAL_SCORE = 80
 EMB_MIN = 0.89
 EMB_MARGIN = 0.02
 STEM = 5
-WINDOW = 2  # сколько слов после названия характеристики считать её значением
+WINDOW = 2  # how many words after a characteristic name are taken as its value
 
 
 @dataclass
 class CharInfo:
     name: str
     is_bool: bool
-    keys: list[str] = field(default_factory=list)          # ключевые леммы названия характеристики
-    values: dict[str, set] = field(default_factory=dict)   # значение -> коды КТРУ, где оно допустимо
+    keys: list[str] = field(default_factory=list)          # key lemmas of the characteristic name
+    values: dict[str, set] = field(default_factory=dict)   # value -> KTRU codes where it is allowed
     value_lemmas: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class Segment:
     text: str
-    full: str                    # весь текст — для вырезания source по спанам
+    full: str                    # the whole text — to cut `source` by spans
     start: int
-    lemmas: list[str] = field(default_factory=list)        # леммы с подставленными синонимами
-    owner: list[int] = field(default_factory=list)         # номер токена, из которого получена лемма
-    spans: list[list[int]] = field(default_factory=list)   # спаны токенов в тексте
+    lemmas: list[str] = field(default_factory=list)        # lemmas with synonyms substituted
+    owner: list[int] = field(default_factory=list)         # index of the token the lemma comes from
+    spans: list[list[int]] = field(default_factory=list)   # token spans in the text
     from_synonym: list[bool] = field(default_factory=list)
     raw: list[str] = field(default_factory=list)            # lemma as written, aligned with `lemmas`
 
@@ -95,12 +96,12 @@ def _lemmas(text: str) -> list[str]:
 class ValueMatcher:
     def __init__(self, store: KtruStore, searcher=None):
         self.store = store
-        self.searcher = searcher  # для эмбеддингов; без него работают синонимы и fuzzy
+        self.searcher = searcher  # for embeddings; without it synonyms and fuzzy matching still work
         self.synonyms = load_synonyms()
         self.aliases = _load(ALIASES_PATH)
         self._emb_cache: dict[str, np.ndarray] = {}
 
-    # ---------- подготовка ----------
+    # ---------- preparation ----------
 
     def _chars_for(self, codes: list[str]) -> dict[str, CharInfo]:
         chars: dict[str, CharInfo] = {}
@@ -109,7 +110,8 @@ class ValueMatcher:
             item = self.store.by_code[code]
             item_words = set(_lemmas(item["name"]))
             for ch in item["characteristics"]:
-                if not is_text_char(ch):
+                # letter sizes (S, M, XL) are matched by ml/sizes.py: here «2 м» would become «Размер: М»
+                if not is_text_char(ch) or is_letter_size_char(ch):
                     continue
                 name_words.setdefault(ch["name"], set()).update(item_words)
                 info = chars.setdefault(ch["name"], CharInfo(ch["name"], is_bool_char(ch)))
@@ -118,16 +120,16 @@ class ValueMatcher:
                         info.values.setdefault(v["text"], set()).add(code)
                         info.value_lemmas[v["text"]] = " ".join(_lemmas(v["text"]))
         for info in chars.values():
-            # слова из названия товара не ключевые: иначе «стул» включает «Поворотная конструкция стула: Да»
+            # product-name words are not key words: otherwise «стул» triggers «Поворотная конструкция стула: Да»
             info.keys = [l for l in _lemmas(info.name) if l not in GENERIC and l not in name_words[info.name]]
-        # в скольких характеристиках кандидатов (включая числовые) встречается ключевое слово:
-        # «рукоять» есть в «Длина рукоятки», «Материал рукояти»… — по нему одному Да/Нет не решаем
+        # in how many characteristics of the candidates (numeric included) a key word occurs:
+        # «рукоять» is in «Длина рукоятки», «Материал рукояти»… — it alone cannot decide yes/no
         all_names = {ch["name"] for c in codes for ch in self.store.by_code[c]["characteristics"]}
         self._key_df = {}
         for name in all_names:
-            for st in {l[:STEM] for l in _lemmas(name)}:  # по основе: «рукоятка» и «рукоять» — одно слово
+            for st in {l[:STEM] for l in _lemmas(name)}:  # by stem: «рукоятка» and «рукоять» are one word
                 self._key_df[st] = self._key_df.get(st, 0) + 1
-        # «Женская», «Женское», «Женский» у разных позиций — одно значение: объединяем коды по лемме
+        # «Женская», «Женское», «Женский» in different positions are one value: merge codes by lemma
         for info in chars.values():
             by_lemma: dict[str, set] = {}
             for value, vlem in info.value_lemmas.items():
@@ -160,7 +162,7 @@ class ValueMatcher:
     def _key_hits(lemmas: list[str], keys: list[str]) -> list[int]:
         return [i for i, l in enumerate(lemmas) if any(_stem_eq(l, k) for k in keys)]
 
-    # ---------- сопоставление ----------
+    # ---------- matching ----------
 
     def _exact_values(self, seg: Segment, info: CharInfo) -> list[tuple[str, set]]:
         """All values of a characteristic written exactly in the fragment, on disjoint words."""
@@ -178,15 +180,15 @@ class ValueMatcher:
         return out
 
     def _match_enum(self, seg: Segment, info: CharInfo) -> tuple[str, int, str, set] | None:
-        """→ (значение, оценка, способ, номера использованных лемм) или None."""
+        """→ (value, score, method, indices of used lemmas) or None."""
         lemmas, best = seg.lemmas, None
         key_hits = self._key_hits(lemmas, info.keys)
         for value, vlem in info.value_lemmas.items():
             n = len(vlem.split())
             grams = [" ".join(lemmas[i:i + n]) for i in range(len(lemmas) - n + 1)]
             if vlem.replace(" ", "").replace(".", "").replace(",", "").isdigit() and not key_hits and len(lemmas) > n:
-                continue  # число — значение («Ростовая группа: 5», «Размер: 48»), только если характеристика
-                          # названа («ростовая группа 5») или число стоит отдельным фрагментом («куртка, 48»)
+                continue  # a number is a value («Ростовая группа: 5», «Размер: 48») only if the characteristic
+                                    # is named («ростовая группа 5») or the number is a separate fragment («куртка, 48»)
             if vlem in grams:
                 i = grams.index(vlem)
                 return value, 100, "exact", set(range(i, i + n))
@@ -200,7 +202,7 @@ class ValueMatcher:
                 if neg:
                     best = (value, 95, "negation", {neg[0], next(k for k in key_hits if k > neg[0])})
                     continue
-            # обобщения: «хлопок» → «Тип ткани: Натуральная»
+            # generalizations: «хлопок» → «Тип ткани: Натуральная»
             alias = [i for i, l in enumerate(lemmas) if l in self.aliases.get(vlem, ()) and l not in NEGATIONS]
             if alias:
                 if best is None or best[1] < 88:
@@ -216,10 +218,11 @@ class ValueMatcher:
                     continue
             head = vlem.split()[0]
             if n >= 2 and head not in PREPOSITIONS and len(head) >= 4:  # broader word for a specific value
-                head_hits = [i for i, l in enumerate(lemmas) if _stem_eq(l, head)]
+                # the whole first word must match: «стекло» ~ «Стекло закаленное», but «металлический» ≠ «Металлобоксы»
+                head_hits = [i for i, l in enumerate(lemmas) if l == head]
                 if head_hits and (best is None or best[1] < PARTIAL_SCORE):
                     best = (value, PARTIAL_SCORE, "partial", {head_hits[0]})
-            if len(vlem) < 5 or not grams:  # короткие (ЛДСП, МДФ) — только точно
+            if len(vlem) < 5 or not grams:  # short values (ЛДСП, МДФ) — exact only
                 continue
             _, score, i = process.extractOne(vlem, grams, scorer=fuzz.ratio)
             if score >= FUZZY_MIN and (best is None or score > best[1]):
@@ -227,9 +230,9 @@ class ValueMatcher:
         return best
 
     def _match_bool(self, seg: Segment, info: CharInfo) -> tuple[str, set] | None:
-        """Да/Нет по ключевым словам: нужно совпадение хотя бы половины ключей
-        («на колесиках» ~ «колесных опор» 1 из 2 — да; «утепленная» ~ «отстегивающейся
-        утепляющей подкладки» 1 из 3 — нет)."""
+        """Yes/no by key words: at least half of the keys must match
+        («на колесиках» ~ «колесных опор» 1 of 2 — yes; «утепленная» ~ «отстегивающейся
+        утепляющей подкладки» 1 of 3 — no)."""
         lemmas = seg.lemmas
         if not info.keys:
             return None
@@ -238,13 +241,13 @@ class ValueMatcher:
         if not hits or len(matched) * 2 < len(info.keys):
             return None
         if len(matched) < len(info.keys) and any(self._key_df.get(k[:STEM], 0) > 1 for k in matched):
-            return None  # частичное совпадение по неразличающему слову
+            return None  # partial match on a non-distinctive word
         i = hits[0]
         if len(matched) < len(info.keys) and i + 1 < len(lemmas) and lemmas[i + 1][:1].isdigit():
-            return None  # «высотой 5 метров» — это размер, а не «Регулировка по высоте: Да»
+            return None  # «высотой 5 метров» is a size, not «Регулировка по высоте: Да»
         neg = [j for j in range(max(0, i - 2), i) if lemmas[j] in NEGATIONS]
         used = set(hits) | set(neg)
-        if not neg and i > 0 and lemmas[i - 1] in ("с", "на", "со"):  # для читаемого source: «на колесиках»
+        if not neg and i > 0 and lemmas[i - 1] in ("с", "на", "со"):  # for a readable source: «на колесиках»
             used.add(i - 1)
         # the same feature both with and without negation
         signs = {any(lemmas[j] in NEGATIONS for j in range(max(0, h - 2), h)) for h in hits}
@@ -254,8 +257,8 @@ class ValueMatcher:
     _bool_conflict = False
 
     def match(self, text: str, codes: list[str], reserved: list[list[int]] = ()) -> tuple[list[dict], list[dict], list[dict]]:
-        """→ (характеристики, ошибки, нормализации для corrections).
-        reserved — спаны слов, уже занятых числовыми характеристиками."""
+        """→ (characteristics, errors, normalizations for corrections).
+        reserved — spans of words already taken by numeric characteristics."""
         chars = self._chars_for(codes)
         rank = {code: i for i, code in enumerate(codes)}
         product_words = {l for c in codes for l in _lemmas(self.store.by_code[c]["name"])}
@@ -280,7 +283,7 @@ class ValueMatcher:
                                                   f"(«{info.name}»). Оставьте один вариант."})
                         continue
                     if value not in info.values:
-                        continue  # «без подлокотников», а у товаров бывает только «Да» — решит сужение
+                        continue  # «без подлокотников» but the products only allow «Да» — narrowing decides
                     score, method = 90, "keyword"
                 else:
                     exact = self._exact_values(seg, info)
@@ -297,14 +300,14 @@ class ValueMatcher:
                     if method in ("exact", "stem", "fuzzy") and any(seg.from_synonym[i] for i in used):
                         method = "synonym"
                     if noun and all(_stem_eq(seg.lemmas[i], noun) for i in used):
-                        method = "name"  # «Вид товара = Шкаф» — повторяет сам товар, кандидатов не отсекает
+                        method = "name"  # «Вид товара = Шкаф» repeats the product itself and does not cut candidates
                 named = any(i not in used for i in self._key_hits(seg.lemmas, info.keys))
                 best_rank = min(rank[c] for c in info.values[value])
                 # ties: the more general characteristic («Вид материала обивки», not «…обивки спинки»)
                 matches.append((named, score, -len(info.keys), -best_rank, info, value, method, used))
 
-            # одно слово — одной характеристике: «на металлическом каркасе» — «Тип каркаса»
-            # (каркас назван явно), а не «Вид материала спинки»; затем по оценке и рангу товара
+            # one word — one characteristic: «на металлическом каркасе» is «Тип каркаса»
+            # (the frame is named explicitly), not «Вид материала спинки»; then by score and product rank
             taken: set = set()
             accepted = []
             for mt in sorted(matches, key=lambda m: m[:4], reverse=True):
@@ -331,7 +334,7 @@ class ValueMatcher:
                     found[info.name] = {"name": info.name, "value": value, "unit": None, "source": src, "span": span,
                                         "method": method, "score": score, "codes": sorted(codes_ok)}
 
-            if not accepted and not seg_errors and seg_no > 0:  # первый фрагмент — название товара
+            if not accepted and not seg_errors and seg_no > 0:  # the first fragment is the product name
                 emb = self._match_embedding(seg, chars)
                 if emb:
                     info, value, score = emb
@@ -349,9 +352,9 @@ class ValueMatcher:
 
     def _check_named(self, seg: Segment, chars: dict[str, CharInfo], accepted: list,
                      product_words: set) -> tuple[list, list]:
-        """Характеристика названа («материал бойка …»), но её значение не нашлось. Слово после
-        названия — значение именно для неё, даже если оно подошло к другой характеристике
-        («деревянный» → «Материал рукояти»): такое совпадение снимаем и сообщаем об ошибке."""
+        """A characteristic is named («материал бойка …») but its value was not found. The word after
+        the name is the value for exactly this characteristic, even if it fit another one
+        («деревянный» → «Материал рукояти»): such a match is removed and an error is reported."""
         lemmas, errors, reported = seg.lemmas, [], {}
         matched_names = {m[3].name for m in accepted}
         used_by = {i: m for m in accepted for i in m[6]}
@@ -364,11 +367,11 @@ class ValueMatcher:
             numeric = all(vl.replace(" ", "").isdigit() for vl in info.value_lemmas.values())
             # numeric lists («Российский размер»: 40, 42, …) — one key word is enough: «размер 300»
             if not hits or (not numeric and len(matched) * 2 <= len(info.keys) and len(info.keys) > 1):
-                continue  # «комплектация» не называет «Количество аккумуляторов в комплекте»
+                continue  # «комплектация» does not name «Количество аккумуляторов в комплекте»
             if any(lemmas[j] in NEGATIONS for j in range(max(0, hits[0] - 2), hits[0])):
                 continue
-            # «цвет сиденья синий», «толщина сидения 16 мм» — перед ключевым словом другой признак,
-            # значит, речь о другой характеристике, а не о «Вид материала сиденья»
+            # «цвет сиденья синий», «толщина сидения 16 мм» — another attribute precedes the key word,
+            # so it is about another characteristic, not «Вид материала сиденья»
             # an adjective right before the key word is its value («деревянным бойком»); a noun is another attribute
             name_lemmas = set(_lemmas(info.name))
             if any(lemmas[j].isalpha() and lemmas[j] not in name_lemmas | GENERIC | product_words | PREPOSITIONS
@@ -381,9 +384,9 @@ class ValueMatcher:
                             and lemmas[j] not in GENERIC and lemmas[j] not in NEGATIONS
                             and lemmas[j] not in product_words
                             and not any(_stem_eq(lemmas[j], k) for k in all_keys)
-                            and not (j in used_by and used_by[j][0]))  # слово занято явно названной характеристикой
+                            and not (j in used_by and used_by[j][0]))  # the word is taken by an explicitly named characteristic
             if not window:
-                continue  # характеристика названа без значения — не ошибка
+                continue  # a characteristic named without a value is not an error
             stolen = {id(used_by[j]) for j in window if j in used_by}
             accepted = [m for m in accepted if id(m) not in stolen]
             overlap = sum(any(_stem_eq(l, x) for x in lemmas) for l in _lemmas(info.name))

@@ -1,9 +1,9 @@
-"""Тестовые запросы из настоящего КТРУ: название (иногда сокращённое) + 1–2 значения характеристик.
+"""Test queries from the real KTRU: a name (sometimes shortened) + 1–2 characteristic values.
 
     .venv/bin/python -m eval.make_ktru_cases            # → eval/cases_ktru.jsonl
 
-Ожидаемый ответ: код позиции, её название и указанные характеристики. Это приближение
-к реальным запросам — на xlsx-выгрузках цифры будут честнее.
+Expected answer: the position code, its name and the given characteristics. This approximates
+real queries — numbers on the xlsx exports are more honest.
 """
 import json
 import random
@@ -24,19 +24,19 @@ def main(seed: int = 0, per_name: int = 1):
     cases = []
     for name, items in by_name.items():
         for it in rng.sample(items, min(per_name, len(items))):
-            # значения, которые однозначно указывают на характеристику внутри позиции
+            # values that unambiguously point to a characteristic within the position
             counts = Counter(v["text"].lower() for ch in it["characteristics"] if is_text_char(ch) for v in ch["values"])
             opts = [(ch["name"], v["text"]) for ch in it["characteristics"]
                     if is_text_char(ch) and not is_bool_char(ch) and len(ch["values"]) > 1
                     for v in ch["values"] if counts[v["text"].lower()] == 1 and len(v["text"]) < 40]
             rng.shuffle(opts)
             picked, used_chars = [], set()
-            for ch_name, v in opts:  # не больше одного значения на характеристику
+            for ch_name, v in opts:  # at most one value per characteristic
                 if ch_name not in used_chars and len(picked) < rng.choice([1, 2]):
                     picked.append((ch_name, v))
                     used_chars.add(ch_name)
             title = name.lower()
-            if len(title.split()) > 3 and rng.random() < 0.5:  # сокращённое название: первые 2 значимых слова
+            if len(title.split()) > 3 and rng.random() < 0.5:  # shortened name: the first 2 meaningful words
                 kept, content = [], 0
                 for w in title.split():
                     kept.append(w)
@@ -44,7 +44,7 @@ def main(seed: int = 0, per_name: int = 1):
                     if content == 2:
                         break
                 short = " ".join(kept)
-                # сокращаем, только если сокращение не подходит к другим названиям
+                # shorten only if the short name does not fit other names
                 if sum(n.lower().startswith(short) for n in by_name) == 1:
                     title = short
             text = ", ".join([title] + [v.lower() for _, v in picked])
