@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
-import { analyze, answerQuestion, ApiError, type AnalysisResult } from "./api"
+import { analyze, answerQuestion, ApiError, type AnalysisResult, type Correction } from "./api"
 import { examples } from "./data"
 import { Button, Card, Icon, NotificationBar, Spinner, Status } from "./ui"
 
@@ -78,17 +78,29 @@ function SearchForm({ description, onChange, onSubmit, loading }: { description:
   </form>
 }
 
+function SearchCorrections({ corrections }: { corrections: Correction[] }) {
+  if (corrections.length === 0) return null
+  return <section aria-label="Исправления в запросе" className="search-corrections">
+    <p>Показаны результаты с исправлениями:</p>
+    <ul>{corrections.map((item, index) => <li key={`${item.from}-${item.to}-${index}`}><s>{item.from}</s><span aria-hidden="true">→</span><strong>{item.to}</strong>{item.reason && <small>{item.reason}</small>}</li>)}</ul>
+  </section>
+}
+
+function correctedText(text: string, corrections: Correction[]) {
+  const correction = corrections.find((item) => item.from.trim().toLocaleLowerCase("ru") === text.trim().toLocaleLowerCase("ru"))
+  return correction?.to || text
+}
+
 function CharacteristicsCard({ result, loading }: { result: AnalysisResult | null; loading: boolean }) {
   if (loading) return <Card className="chars"><h2>Распознанные характеристики</h2><div className="api-loading"><Spinner /> Сопоставляем описание со справочником…</div></Card>
   if (!result) return null
   return <Card className="chars" id="characteristics">
     <div className="card__head"><h2>Распознанные характеристики</h2><span className="hint">Найдено: {result.characteristics.length}</span></div>
-    {result.corrections.length > 0 && <section className="api-section"><h3>Исправления и нормализация</h3><ul className="api-list">{result.corrections.map((item, index) => <li key={`${item.from}-${index}`}><Icon name="check" size={16} /><span><s>{item.from}</s> → <strong>{item.to}</strong>{item.reason && <small>{item.reason}</small>}</span></li>)}</ul></section>}
     {(result.product_intent || result.subtype_context?.length > 0) && <section className="api-section"><h3>Товар и контекст</h3><p>{result.product_intent && <>Товар: <strong>{result.product_intent}</strong></>}{result.subtype_context?.length > 0 && <> · Контекст: {result.subtype_context.map((signal) => signal.value).join(", ")}</>}</p></section>}
     {result.errors.length > 0 && <section className="api-section" aria-label="Ошибки в описании"><h3>Требует внимания</h3><ul className="api-list api-list--errors">{result.errors.map((item, index) => <li key={`${item.type}-${index}`}><Icon name="alert" size={16} /><span><strong>{item.characteristic || "Описание товара"}</strong>: {item.message}{item.suggestion && <small>Предложение: {item.suggestion}</small>}</span></li>)}</ul></section>}
     {result.characteristics.length > 0 ? <div aria-label="Распознанные характеристики" className="api-table" role="table">
-      <div className="api-table__head" role="row"><span role="columnheader">Характеристика</span><span role="columnheader">Значение</span><span role="columnheader">Фрагмент описания</span></div>
-      {result.characteristics.map((item, index) => <div className="api-table__row" key={`${item.name}-${index}`} role="row"><strong role="cell">{item.name}</strong><span role="cell">{item.value}{item.unit ? ` ${item.unit}` : ""}</span><span className="api-table__source" role="cell">{({ ktru: "КТРУ", portal: "Портал", user: "Пользователь" } as Record<string, string>)[item.source || ""] || item.source || "—"}{item.user_text && <small>{item.user_text}</small>}</span></div>)}
+      <div className="api-table__head" role="row"><span role="columnheader">Характеристика</span><span role="columnheader">Значение</span></div>
+      {result.characteristics.map((item, index) => <div className="api-table__row" key={`${item.name}-${index}`} role="row"><strong role="cell">{correctedText(item.name, result.corrections)}</strong><span role="cell">{correctedText(item.value, result.corrections)}{item.unit ? ` ${item.unit}` : ""}</span></div>)}
     </div> : <p className="api-empty">Характеристики пока не найдены. Уточните описание и повторите поиск.</p>}
   </Card>
 }
@@ -100,12 +112,12 @@ function plural(count: number) {
   return "позиций"
 }
 
-function KtruCard({ result, loading, selectedAnswer, onAnswer, onSubmitAnswer }: { result: AnalysisResult | null; loading: boolean; selectedAnswer: string; onAnswer: (value: string) => void; onSubmitAnswer: () => void }) {
+function KtruCard({ result, loading }: { result: AnalysisResult | null; loading: boolean }) {
   if (loading && !result) return <Card className="ktru"><div className="ktru-head"><h2>Подбор кода КТРУ</h2></div><div className="api-loading"><Spinner /> Ищем позиции…</div></Card>
   if (!result) return <Card className="ktru"><div className="ktru-head"><h2>Подбор кода КТРУ</h2><Status tone="neutral">Ожидает данных</Status></div><div className="ktru-empty"><p>Подбор начнётся после анализа описания.</p></div></Card>
   const complete = result.ktru !== null
   const lastCount = result.remaining_count ?? result.steps.at(-1)?.count ?? result.candidates.length
-  return <div className="api-side-stack"><Card className="ktru">
+  return <Card className="ktru">
     <div className="ktru-head"><div className="ktru-head__row"><h2>Подбор кода КТРУ</h2><Status tone={complete ? "success" : result.next_step ? "info" : "warning"}>{complete ? "Код определён" : result.next_step ? "Нужно уточнение" : "Нет результата"}</Status></div>{!complete && <p className="ktru-head__count">Поиск: {result.retrieval_count ?? result.candidates.length} · По товару: {result.compatible_count ?? lastCount} · Осталось: <b>{lastCount}</b> {plural(lastCount)}</p>}</div>
     {result.steps.length > 0 && <ol aria-label="Сужение списка КТРУ" className="history">{result.steps.map((step, index) => <li className={index === result.steps.length - 1 ? "is-last" : ""} key={`${step.stage}-${index}`}><span className="history__dot" /><span className="history__label">{step.stage}</span><span className="history__count">{step.count}</span></li>)}</ol>}
     {complete && <div className="api-final"><span className="label-caps">Позиция КТРУ</span><h3>{result.ktru_name || "Товар"}</h3><strong className="api-code">{result.ktru}</strong></div>}
@@ -113,11 +125,14 @@ function KtruCard({ result, loading, selectedAnswer, onAnswer, onSubmitAnswer }:
     {!complete && result.candidates.length > 0 && <div className="api-candidates"><h3>Подходящие позиции</h3><ul>{result.candidates.map((candidate) => <li key={candidate.code}><strong>{candidate.name}</strong><span>{candidate.code}</span>{candidate.score != null && <small>Совпадение: {Math.round(candidate.score * 100)}%</small>}</li>)}</ul></div>}
 
   </Card>
-    {result.next_step && <Card className="question" id="question"><span className="label-caps label-caps--blue">Уточняющий вопрос</span><h3>{result.next_step.message}</h3>{result.next_step.characteristic && <p>Характеристика: {result.next_step.characteristic}</p>}
-      <fieldset className="radios" disabled={loading}><legend className="sr-only">{result.next_step.message}</legend>{result.next_step.options.map((option) => <label className={`radio ${selectedAnswer === option ? "is-checked" : ""}`} key={option}><input checked={selectedAnswer === option} name="clarify" onChange={() => onAnswer(option)} type="radio" value={option} /><span className="radio__mark" />{option}</label>)}</fieldset>
-      <Button className="btn--block" disabled={!selectedAnswer} loading={loading} onClick={onSubmitAnswer} variant="primary">{loading ? "Уточняем подбор" : "Уточнить подбор"}</Button>
-    </Card>}
-  </div>
+}
+
+function ClarifyingQuestion({ result, loading, selectedAnswer, onAnswer, onSubmitAnswer }: { result: AnalysisResult | null; loading: boolean; selectedAnswer: string; onAnswer: (value: string) => void; onSubmitAnswer: () => void }) {
+  if (!result?.next_step) return null
+  return <Card className="question" id="question"><span className="label-caps label-caps--blue">Уточняющий вопрос</span><h3>{result.next_step.message}</h3>{result.next_step.characteristic && <p>Характеристика: {result.next_step.characteristic}</p>}
+    <fieldset className="radios" disabled={loading}><legend className="sr-only">{result.next_step.message}</legend>{result.next_step.options.map((option) => <label className={`radio ${selectedAnswer === option ? "is-checked" : ""}`} key={option}><input checked={selectedAnswer === option} name="clarify" onChange={() => onAnswer(option)} type="radio" value={option} /><span className="radio__mark" />{option}</label>)}</fieldset>
+    <Button className="btn--block" disabled={!selectedAnswer} loading={loading} onClick={onSubmitAnswer} variant="primary">{loading ? "Уточняем подбор" : "Уточнить подбор"}</Button>
+  </Card>
 }
 
 export default function App() {
@@ -167,7 +182,8 @@ export default function App() {
 
   return <div className="app"><Header /><main className="page"><PageHead />
     <SearchForm description={description} loading={loading} onChange={changeDescription} onSubmit={startAnalysis} />
+    {result && <SearchCorrections corrections={result.corrections} />}
     {error && <div className="page-notice"><NotificationBar title="Не удалось выполнить запрос" tone="danger">{error}</NotificationBar></div>}
-    {(loading || result) && <div className="workspace"><div className="workspace__main"><CharacteristicsCard loading={loading && !result} result={result} /></div><aside className="workspace__side"><KtruCard loading={loading} onAnswer={setSelectedAnswer} onSubmitAnswer={submitAnswer} result={result} selectedAnswer={selectedAnswer} /></aside></div>}
+    {(loading || result) && <div className="workspace"><div className="workspace__main"><ClarifyingQuestion loading={loading} onAnswer={setSelectedAnswer} onSubmitAnswer={submitAnswer} result={result} selectedAnswer={selectedAnswer} /><KtruCard loading={loading} result={result} /></div><aside className="workspace__side"><CharacteristicsCard loading={loading && !result} result={result} /></aside></div>}
   </main><Footer /></div>
 }
