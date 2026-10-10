@@ -28,15 +28,12 @@ services:
 
   backend:
     build:
-      context: ../backend
+      context: ../backend/aggregator-service
     restart: unless-stopped
-    environment:
-      MODEL_SERVICE_URL: http://model:8001
-      REDIS_URL: redis://redis:6379/0
-      MODEL_TIMEOUT_S: ${MODEL_TIMEOUT_S:-30}
-      MAX_TEXT_LENGTH: ${MAX_TEXT_LENGTH:-2000}
-      SESSION_TTL_S: ${SESSION_TTL_S:-3600}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    env_file: aggregator.env
+    # time between SIGTERM and SIGKILL; must exceed SHUTDOWN_TIMEOUT_S. Docker's default is not
+    # reliable: `docker stop` on Docker 29.8 killed the container after 3 s
+    stop_grace_period: 10s
     ports:
       - "8000:8000"
     depends_on:
