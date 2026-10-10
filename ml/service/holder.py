@@ -62,6 +62,11 @@ class PipelineHolder:
         thread.start()
         return thread
 
+    @property
+    def pipeline(self) -> Analyzer | None:
+        """The loaded pipeline, None until it is ready."""
+        return self._pipeline
+
     def wait(self, timeout: float | None = None) -> bool:
         """True when loading has finished (successfully or not)."""
         return self._done.wait(timeout)

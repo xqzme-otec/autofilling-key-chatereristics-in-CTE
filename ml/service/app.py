@@ -12,6 +12,7 @@ immediately; /analyze returns 503 until it is ready.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -65,6 +66,9 @@ def create_app(settings: Settings | None = None, pipeline_factory: Callable[[], 
             repository.open()  # connects in the background: a missing Postgres does not block the start
         if load_in_background:
             holder.load_in_background()
+            # the new-characteristic check (rules + classifier) loads right after the pipeline, not on a request
+            threading.Thread(target=lambda: holder.wait() and service.warm_up(), name="newchar-loader",
+                             daemon=True).start()
         else:
             holder.load()
         yield
