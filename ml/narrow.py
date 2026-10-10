@@ -18,6 +18,14 @@ from ml.text import main_noun, tokenize
 MAX_PRODUCT_OPTIONS = 10
 
 
+def _code_word(count: int) -> str:
+    if count % 10 == 1 and count % 100 != 11:
+        return "код"
+    if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14:
+        return "кода"
+    return "кодов"
+
+
 def _lemmas(text: str) -> list[str]:
     return [t["lemma"] for t in tokenize(text) if t["text"][0].isalnum()]
 
@@ -109,6 +117,7 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
         if len(new_remaining) == len(remaining) and [c["code"] for c in new_remaining] == [c["code"] for c in remaining]:
             continue
         remaining = new_remaining
+        f["used_for_narrowing"] = True
         steps.append({"stage": label, "count": len(remaining)})
 
     # 3. result or the next question
@@ -181,7 +190,8 @@ def _best_question(remaining: list[dict], filled: set, store: KtruStore):
         if len(options) < 2:
             continue
         missing = n - len(d["codes"])  # positions without the characteristic stay for any answer
-        expected = sum(sum(o in vals for vals in d["codes"].values()) + missing for o in options) / len(options)
+        sizes = [sum(o in vals for vals in d["codes"].values()) for o in options]
+        expected = missing + sum(size * size for size in sizes) / sum(sizes)
         if expected >= n:
             continue  # every answer keeps everyone — the question is useless
         key = (expected, not d["required"], len(options))
@@ -189,3 +199,49 @@ def _best_question(remaining: list[dict], filled: set, store: KtruStore):
             ordered = [d["label"][o] for o in sorted(options, key=lambda o: d["order"][o])]
             best, best_key = (name, ordered, d["required"]), key
     return best
+
+
+def rerank_and_question(remaining: list[dict], characteristics: list[dict], signals: list[dict],
+                        store: KtruStore, portal, searcher, answers: list[dict]):
+    """Rank context evidence without excluding a KTRU-compatible position."""
+    if not remaining:
+        return remaining, None, None
+    words = [s["value"] for s in signals]
+    words += [f["value"] for f in characteristics if f.get("origin") in ("portal", "new")
+              and f.get("value") not in (None, "Да", "Нет") and not f.get("used_for_narrowing")]
+    if words and len(remaining) > 1:
+        import numpy as np
+
+        query = " ".join(words)
+        qvec = searcher.encode([query])[0]
+        passages = [f"{c['name']}. {store.by_code[c['code']].get('description') or ''}" for c in remaining]
+        vectors = searcher.encode(passages, query=False)
+        similarities = np.asarray(vectors) @ qvec
+        for c, similarity in zip(remaining, similarities):
+            name_lemmas = set(_lemmas(c["name"]))
+            direct = sum(any(l in name_lemmas for l in _lemmas(word)) for word in words)
+            c["score"] = round(float(c["score"]) + 0.12 * float(similarity) + 0.08 * direct, 4)
+        remaining = sorted(remaining, key=lambda c: c["score"], reverse=True)
+        for f in characteristics:
+            if f.get("origin") in ("portal", "new"):
+                f["used_for_reranking"] = True
+        step = {"stage": "Ранжирование по контексту", "count": len(remaining)}
+    else:
+        step = None
+
+    if len(remaining) <= 1:
+        return remaining, None, step
+    names = list(dict.fromkeys(c["name"] for c in remaining))
+    if len(names) > 1:
+        counts = {n: sum(c["name"] == n for c in remaining) for n in names}
+        options = names[:MAX_PRODUCT_OPTIONS]
+        return remaining, {"type": "product", "message": f"Осталось {len(remaining)} {_code_word(len(remaining))} разных товаров. Уточните вид товара:",
+                           "characteristic": None, "options": options, "counts": [counts[n] for n in options]}, step
+    filled = {f["name"] for f in characteristics if not f.get("conflict")}
+    best = _best_question(remaining, filled, store)
+    if best:
+        name, options, required = best
+        return remaining, {"type": "characteristic", "message": f"Уточните характеристику «{name}»: ",
+                           "characteristic": name, "options": options, "required": required}, step
+    return remaining, {"type": "code", "message": "Характеристики не различают коды. Выберите код:",
+                       "characteristic": None, "options": [c["code"] for c in remaining]}, step

@@ -14,7 +14,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from ml.text import tokenize
+from ml.text import pos, tokenize
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = ROOT / "data" / "raw" / "supplier_portal"
@@ -37,17 +37,29 @@ def build() -> None:
 
     out: dict[str, dict] = {}
     for file, category in CATEGORIES.items():
+        products: dict[str, Counter] = defaultdict(Counter)
+        names = pd.read_excel(RAW_DIR / f"{file}.xlsx", sheet_name=0, usecols=["Наименование СТЕ"], dtype=str)
+        for name in names["Наименование СТЕ"].dropna():
+            words = [t for t in tokenize(str(name).split(",")[0][:100]) if t["text"][0].isalpha()][:5]
+            noun = next((t["lemma"] for t in words if pos(t["text"]) == "NOUN"), None)
+            if noun:
+                for t in words:
+                    if pos(t["text"]) == "ADJF" and abs(words.index(t) - next(i for i, w in enumerate(words) if w["lemma"] == noun)) <= 2:
+                        products[noun][t["lemma"]] += 1
         df = pd.read_excel(RAW_DIR / f"{file}.xlsx", sheet_name=1, dtype=str)
         df = df[df["Тип (базовая/эталонная/категореобразующая)"].isin(["Базовая", "Эталонная"])]
         usage = df.groupby("Название характеристики")["Код КПГЗ"].nunique()
         values: dict[str, Counter] = defaultdict(Counter)
         units: dict[str, Counter] = defaultdict(Counter)
         kinds: dict[str, Counter] = defaultdict(Counter)
+        aliases: dict[str, set[str]] = defaultdict(set)
         for r in df.itertuples(index=False):
             name = str(r[3]).strip()
             if usage.get(name, 0) < MIN_USAGE or name.lower() in SKIP_NAMES or len(name) > 60:
                 continue
             kinds[name][str(r[5])] += 1
+            if isinstance(r[9], str) and r[9].strip() and r[9].strip() != name:
+                aliases[name].add(r[9].strip())
             if isinstance(r[7], str) and r[7].strip():
                 units[name][r[7].strip()] += 1
             if isinstance(r[6], str) and r[6].strip() and str(r[5]) in ("Текст", "Справочник", "Признак"):
@@ -62,6 +74,10 @@ def build() -> None:
                            if units[name] and "числов" in kinds[name].most_common(1)[0][0].lower() else None,
                    "values": [v for v, _ in values[name].most_common(MAX_VALUES)]}
             for name in kinds}
+        for name, info in out[category].items():
+            info["aliases"] = sorted(aliases[name])[:20]
+        out[category]["_products"] = {noun: dict(counts.most_common(100)) for noun, counts in products.items()
+                                      if sum(counts.values()) >= 2}
         print(f"{file}: {len(out[category])} характеристик")
     DICT_PATH.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"→ {DICT_PATH} ({DICT_PATH.stat().st_size // 1024} КБ)")
@@ -72,12 +88,15 @@ class PortalMatcher:
         self.by_category: dict[str, list[tuple[list[str], str, dict]]] = {}
         self.usage: dict[str, dict[str, int]] = {}
         self.value_index: dict[str, dict[str, set]] = {}
+        self.products: dict[str, dict[str, dict[str, int]]] = {}
         if not path.exists():
             return  # no dictionary — the «portal» level is skipped, «new» remains
         data = json.loads(path.read_text(encoding="utf-8"))
         for category, chars in data.items():
+            self.products[category] = chars.pop("_products", {})
             # long names are checked first: «Цвет сиденья» before «Цвет»
-            names = sorted(((_lemmas(n), n, info) for n, info in chars.items()), key=lambda x: -len(x[0]))
+            names = sorted(((_lemmas(alias), n, info) for n, info in chars.items()
+                            for alias in [n, *info.get("aliases", [])]), key=lambda x: -len(x[0]))
             self.by_category[category] = [x for x in names if x[0]]
             self.usage[category] = {n: info["usage"] for n, info in chars.items()}
             index: dict[str, dict] = defaultdict(dict)  # value lemmas → {characteristic: value as on the portal}
@@ -89,6 +108,9 @@ class PortalMatcher:
 
     def has(self, category: str | None, name: str) -> bool:
         return bool(category) and name in self.usage.get(category, {})
+
+    def is_subtype(self, category: str | None, product: str | None, word: str) -> bool:
+        return bool(category and product and self.products.get(category, {}).get(product, {}).get(word))
 
     @property
     def available(self) -> bool:

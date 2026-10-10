@@ -1,4 +1,6 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-
+markers = [
+    "integration: tests with the real Pipeline (model + KTRU data); skip with -m \"not integration\"",
+]

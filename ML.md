@@ -23,6 +23,8 @@
 **Иерархия источников характеристик** (поле `origin`): `ktru` — характеристика и значение из справочника КТРУ;
 `portal` — нет в КТРУ, но есть в справочнике Портала поставщиков; `new` — нет ни там, ни там, сохраняем как новую;
 `answer` — выбрана пользователем из вариантов КТРУ. В сужении кодов КТРУ участвуют только `ktru` и `answer`.
+Между Порталом и новой — уровень «встречалась раньше»: HTTP-сервис сохраняет каждую `new` в Postgres и помечает
+`known: true`, если она уже была в другом описании того же товара (см. «Новые характеристики» ниже).
 
 **Распознаваемые ошибки** (`severity: error`): опечатки и раскладка (с исправлением), несуществующее значение
 («материал бойка деревянный», «молоток с деревянным бойком» → допустимы Алюминий, Медь, Сталь; «ростовая группа 15»,
@@ -122,8 +124,9 @@ r = p.analyze({
     {"name": "Тип каркаса", "value": "Металлический", "unit": null, "source": "металлическом", "span": [8, 21], "method": "stem", "confidence": 0.85, "origin": "ktru"},
     {"name": "Высота", "value": "1100–1200", "unit": "Миллиметр", "user_value": "1100 Миллиметр", "source": "110 см", "span": [30, 36], "method": "number", "confidence": 0.95, "origin": "ktru"},
     {"name": "Цвет", "value": "синий", "unit": null, "source": "цвет синий", "span": [38, 48], "method": "portal", "confidence": 0.7, "origin": "portal"},
-    {"name": "Противоскользящие ножки", "value": "Да", "unit": null, "source": "противоскользящие ножки", "span": [50, 73], "method": "new", "confidence": 0.5, "origin": "new"}
+    {"name": "Противоскользящие ножки", "value": "Да", "unit": null, "source": "противоскользящие ножки", "span": [50, 73], "method": "new", "confidence": 0.5, "origin": "new", "known": false}
   ],
+  "category": "мебель",
   "candidates": [{"code": "31.01.11.150-00000003", "name": "Стул на металлическом каркасе", "score": 0.92}],
   "candidates_total": 4,
   "errors": [
@@ -146,8 +149,134 @@ r = p.analyze({
   («какие характеристики необходимо добавить»).
 - `characteristics[].source` — фрагмент текста пользователя, из которого взята характеристика;
   `characteristics[].origin` — источник: `ktru` / `portal` / `new` / `answer`.
+- `characteristics[].known` — только у `origin: new` и только в ответе HTTP-сервиса с Postgres: `true`, если
+  характеристика уже встречалась в другом описании того же товара. Без Postgres поля нет.
+- `category` — категория найденных товаров: `одежда` / `мебель` / `инструменты`; `null`, если товар не найден.
 - `next_step.type`: `product` (выбрать товар), `characteristic` (указать характеристику), `code` (позиции не различаются — выбрать код); `null`, когда код определён или товар не найден.
 - `method` у характеристики — как найдено: `exact`, `stem`, `fuzzy`, `synonym`, `alias`, `negation`, `keyword`, `number`, `dimensions` (габариты), `size_table` (размер по таблице), `embedding`, `name` (повторяет название товара), `answer` (ответ пользователя), `portal`, `new`.
+
+## HTTP-сервис модели (`ml/service/`)
+
+HTTP-обёртка над `Pipeline.analyze()` для агрегатора (контракт — `docs/api.md`, раздел 4, ветка
+`aggregator-service`). Состояния диалога не хранит: в каждый вызов приходят весь текст и все ответы. Слои:
+`app.py` (HTTP) → `analysis.py` (сервисный слой: пайплайн, шаг «встречалась раньше», логи входа и выхода) →
+`holder.py` (пайплайн под блокировкой) и `repository.py` (Postgres).
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| `POST` | `/analyze` | тело `{"raw": str, "answers": [...], "tokens"?: [...]}` → результат `Pipeline.analyze()` (формат выше) + `known` у новых характеристик |
+| `GET` | `/health` | процесс жив: `200 {"status": "ok" \| "degraded", "pipeline": "loading" \| "ready" \| "failed", "postgres": "ok" \| "unavailable" \| "off"}`; `degraded` — Postgres недоступен |
+| `GET` | `/ready` | пайплайн загружен: `200 {"status": "ready", "load_seconds": …}`, иначе `503` (`loading` / `failed` + `error`). От Postgres не зависит |
+
+**Новые характеристики (Postgres).** После пайплайна сервисный слой берёт характеристики с `origin: new` (их нет ни
+в КТРУ, ни в справочнике Портала) и ищет их в таблице `new_characteristics` по ключу (категория, `product_intent`,
+леммы названия без учёта формы и порядка слов). `known: true` — характеристика уже встречалась в **другом** описании
+того же товара; затем характеристики текущего описания сохраняются. Описание определяется хэшем нормализованного
+текста, поэтому следующий раунд того же диалога (тот же текст + ответы) не делает характеристику известной.
+Встреченная впервые характеристика сохраняется, только если подходит товару — `fits_product` в
+`ml/service/analysis.py`. Пока это заглушка с TODO, которая принимает всё: распознавание моделью ещё не сделано.
+Неподходящая характеристика остаётся в ответе (ничего не выбрасываем), но не сохраняется.
+Таблицу сервис создаёт сам при подключении. На сужение кодов КТРУ `known` не влияет. Агрегатор передаёт
+`known` и `category` фронтенду.
+
+**Без Postgres сервис деградирует, а не падает:** `/ready` остаётся `200`, `/health` показывает `degraded`, у
+`/analyze` пропускается только этот шаг (поля `known` нет). После сбоя шаг пропускается 30 с без ожидания
+соединения (иначе каждый запрос ждал бы 1 с), затем пробует снова; подключение восстанавливается само.
+
+Пайплайн (модель + индекс КТРУ) загружается один раз при старте в фоновом потоке (~5–10 с), `/health` отвечает
+сразу; пока пайплайн не готов, `/analyze` отдаёт `503 model_not_ready`.
+
+**Ошибки** — формат как у агрегатора, плюс `request_id`:
+`{"error": {"code": "...", "message": "...", "request_id": "...", "details"?: [{"loc", "msg", "type"}]}}`.
+
+| HTTP | `code` | Когда |
+|---|---|---|
+| 422 | `validation_error` | не JSON, нет `raw`, `raw` не строка, `answers` не список, ответ без `value` или без `characteristic` при `type=characteristic`, неизвестный `type` |
+| 422 | `text_too_long` / `too_many_answers` | `raw` длиннее `MAX_TEXT_LENGTH` символов / ответов больше `MAX_ANSWERS` |
+| 413 | `payload_too_large` | `Content-Length` больше `MAX_BODY_BYTES` |
+| 503 | `model_not_ready` | пайплайн ещё грузится или не загрузился |
+| 500 | `internal_error` | необработанная ошибка; traceback только в логе, клиент получает короткое сообщение и `request_id` |
+
+Пустой или из одних пробелов `raw` — не ошибка запроса: пайплайн вернёт результат без кода (агрегатор такие тексты
+отсекает сам). Неизвестные поля тела игнорируются, `answers: null` = `[]`.
+
+**Параллельные запросы.** `Pipeline.analyze()` не потокобезопасен (состояние вызова хранится в общих объектах,
+например `ValueMatcher.last_consumed`; на Mac параллельный вызов модели на MPS роняет процесс). Поэтому вызовы
+выполняются в пуле потоков (event loop не блокируется, `/health` отвечает всегда) и сериализуются блокировкой:
+один процесс обрабатывает один `analyze` за раз, остальные ждут (`queued_ms` в логе). Масштабировать — числом
+процессов/контейнеров, а не потоков.
+
+**Логи** (stdout, формат из `AGENTS.md`): на каждый запрос строка `ml.service.access` — метод, путь, статус, мс.
+Для `/analyze` сервисный слой пишет вход и выход модели:
+- `analyze input:` — длина текста, первые 100 символов, ответы пользователя (`тип:характеристика=значение`);
+- `analyze:` — категория, товар (`product_intent`), кандидаты после поиска и после сужения, первые 3 кода, код КТРУ,
+  характеристики `название=значение (origin, known)`, число известных, типы ошибок, `next_step`, статус шага
+  Postgres (`ok` / `failed` / `skipped` / `off` / `-` — нечего проверять), `queued_ms`, `pipeline_ms`, `postgres_ms`;
+- на `DEBUG` — полный запрос и полный ответ JSON (`analyze input (full)`, `analyze output (full)`).
+
+Недоступный Postgres — `WARNING` от `ml.service.analysis` (шаг пропущен) и от `psycopg.pool` (попытки подключения).
+`request_id` берётся из заголовка `X-Request-ID` (символы `A-Za-z0-9._:-`, до 128) или генерируется, возвращается в
+заголовке ответа и пишется во все строки лога этого запроса. Полный текст описания — только на `DEBUG`.
+
+**Переменные окружения**
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `HOST` / `PORT` | `0.0.0.0` / `8001` | адрес сервиса |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `KTRU_PATH` | `data/processed/ktru.parquet` | другой файл справочника |
+| `MAX_TEXT_LENGTH` | `5000` | максимум символов в `raw` (у агрегатора 2000) |
+| `MAX_ANSWERS` | `100` | максимум ответов в `answers` |
+| `MAX_BODY_BYTES` | `262144` | максимум размера тела запроса |
+| `POSTGRES_DSN` | не задан (в Docker Compose — `postgresql://ktru:…@postgres:5432/ktru`) | Postgres для новых характеристик; не задан — шаг «встречалась раньше» выключен (`postgres: off`) |
+| `OMP_NUM_THREADS` | в Docker `4` | потоки torch; без ограничения в контейнере p50 растёт с ~12 до ~106 мс |
+
+Неверное значение переменной — сервис не стартует (код выхода 2, причина в логе).
+
+### Запуск локально
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m ml.service                     # http://localhost:8001
+curl -s localhost:8001/ready
+curl -s -X POST localhost:8001/analyze -H 'Content-Type: application/json' -H 'X-Request-ID: demo-1' \
+     -d '{"raw": "стол письменный", "answers": []}'
+curl -s -X POST localhost:8001/analyze -H 'Content-Type: application/json' \
+     -d '{"raw": "стол письменный", "answers": [{"type": "characteristic", "characteristic": "Тип каркаса", "value": "Деревянный"}]}'
+```
+
+Второй запрос (ответ на `next_step` первого) возвращает `"ktru": "31.01.10.000-00000004"`.
+
+### Запуск в Docker
+
+```bash
+docker build -f ml/Dockerfile -t ktru-model .      # из корня репозитория; ~3 ГБ (CPU-torch + модель)
+docker run --rm -p 8001:8001 ktru-model
+# со словарём Портала (в образ не входит — данные организаторов):
+docker run --rm -p 8001:8001 \
+  -v "$PWD/data/processed/portal_characteristics.json:/app/data/processed/portal_characteristics.json:ro" ktru-model
+```
+
+Модель `intfloat/multilingual-e5-small` скачивается при сборке и лежит в образе, эмбеддинги КТРУ считаются при сборке
+(`data/cache`), поэтому контейнер стартует без сети (`HF_HUB_OFFLINE=1`) за ~5 с. Пользователь в контейнере
+не root, `HEALTHCHECK` — по `/ready` (контейнер `healthy`, только когда пайплайн загружен).
+
+### Тесты сервиса
+
+```bash
+.venv/bin/python -m pytest -q tests/test_service.py              # быстрые, с фейковым пайплайном (~1 с)
+.venv/bin/python -m pytest -q tests/test_service_integration.py  # с настоящим Pipeline (~10 с)
+.venv/bin/python -m pytest -q -m "not integration"               # всё, кроме тестов с настоящей моделью
+# новые характеристики: без Postgres — ключ и деградация; с Postgres — сохранение и known
+docker run -d --name ktru-test-pg -p 5432:5432 -e POSTGRES_PASSWORD=test postgres:18
+TEST_POSTGRES_DSN=postgresql://postgres:test@localhost:5432/postgres .venv/bin/python -m pytest -q tests/test_new_characteristics.py
+```
+
+Интеграционные тесты проверяют и совместимость ответа с агрегатором: обязательные поля и типы, которые требует
+`backend/internal/client/model/client.go` и `domain.AnalysisResult` в Go.
+
+Замеры (Mac на Apple Silicon, 30 запросов по 6 разным текстам): локально p50 9.5 мс, p95 13.2 мс; в Docker (CPU, 4 потока)
+p50 11.8 мс, p95 14.1 мс; при 10 одновременных клиентах ~44 запроса/с в Docker, ~114 запросов/с локально.
 
 ## Проверка
 

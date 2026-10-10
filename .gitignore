@@ -1,51 +1,68 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# Compiled binaries and test output
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
 coverage.*
 !coverage.go
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
+# Local Go workspace
 go.work
 go.work.sum
 
-# env file
-.env
+# Frontend dependencies, builds, and caches
+node_modules/
+dist/
+.vite/
+.cache/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Python/test artifacts
+# Python environments and caches
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Source and generated datasets
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+
+# Downloaded datasets, generated indexes, and model weights
 data/raw/
+data/cache/
 data/processed/*
 !data/processed/ktru.parquet
+/datasets/
+/models/
+/artifacts/
 docs/reports/
-
-# Editor/IDE
-.DS_Store
-# .idea/
-# .vscode/
-
-# ML: окружение, кэш эмбеддингов, сгенерированные тестовые запросы
-.venv/
-data/cache/
 eval/cases_ktru.jsonl
 eval/cases_portal.jsonl
+*.sqlite
+*.sqlite3
+*.db
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local test table for POST /api/v1/analyze/batch
+/test_products.csv

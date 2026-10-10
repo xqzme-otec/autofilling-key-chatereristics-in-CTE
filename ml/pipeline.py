@@ -22,6 +22,7 @@ Output:
                        source — fragment of the user text; origin — where the characteristic comes from:
                        ktru (KTRU reference) | portal (portal reference) | new (in neither —
                        kept, never dropped) | answer (chosen by the user from KTRU options);
+    category         — category of the found products (одежда | мебель | инструменты) or null;
     candidates       — remaining KTRU codes {code, name, score}, candidates_total — their count;
     errors           — {type, severity, message, ...}: nonexistent_value, out_of_range, unit_mismatch,
                        conflict, contradiction, product_not_found, invalid_input (severity=error);
@@ -38,7 +39,7 @@ import time
 
 from ml.correct import Corrector
 from ml.ktru import DEFAULT_PATH, KtruStore
-from ml.narrow import answer_to_characteristic, missing_required, narrow
+from ml.narrow import answer_to_characteristic, missing_required, narrow, rerank_and_question
 from ml.search import EMB_MODEL, Searcher
 from ml.text import main_noun, normalize, pos, to_nominative, tokenize
 from ml.portal import PortalMatcher, new_characteristic
@@ -101,6 +102,7 @@ class Pipeline:
 
         # 2. candidate search: the whole text + the first fragment (usually the product name)
         head = text.split(",")[0]
+        product_intent = main_noun(head)
         candidates = self.searcher.search(text, k=SEARCH_K, extra_queries=[head])
         not_found = self._not_found(head, candidates)
         if candidates and not self.searcher.reranker:
@@ -152,14 +154,15 @@ class Pipeline:
         tick("narrow")
 
         # 5. what did not fit KTRU is not dropped: the portal reference, otherwise a new characteristic
-        extra_notices = []
+        extra_notices, signals, category = [], [], None
         if not not_found and candidates:
             pool = remaining or candidates
             category = self.store.by_code[pool[0]["code"]]["category"]
             # found among search candidates, but none of the remaining positions has it: not KTRU for this product
             pool_chars = {ch["name"] for c in pool for ch in self.store.by_code[c["code"]]["characteristics"]}
             for f in characteristics:
-                if f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars:
+                if f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars \
+                        and not f.get("used_for_narrowing"):
                     # a dimension of a dropped candidate («Ширина стеллажа» for a chair) keeps only its axis
                     f["name"] = f.get("axis") or f["name"]
                     f["origin"] = "portal" if self.portal.has(category, f["name"]) else "new"
@@ -169,9 +172,17 @@ class Pipeline:
                     [e["span"] for e in value_errors + num_errors if e.get("span")] + reserved + \
                     self.values.last_consumed
             product_words = {l for c in pool for l in _lemmas(c["name"])}
-            extra, extra_notices = self._extra_characteristics(text, category, taken, unmatched_numbers,
-                                                                product_words, pool, characteristics)
+            extra, extra_notices, signals = self._extra_characteristics(text, category, taken, unmatched_numbers,
+                                                                         product_words, pool, characteristics,
+                                                                         product_intent)
             characteristics += extra
+            remaining, next_step, soft_step = rerank_and_question(remaining, characteristics, signals, self.store,
+                                                                   self.portal, self.searcher, answers)
+            if soft_step:
+                steps.append(soft_step)
+            else:
+                for signal in signals:
+                    signal["used_for_reranking"] = False
         tick("extra")
 
         errors = input_errors + value_errors + num_errors + conflicts + extra_notices
@@ -200,10 +211,17 @@ class Pipeline:
             "text": text,
             "corrections": corrections,
             "characteristics": [self._public(f) for f in characteristics if not f.get("conflict")],
+            "product_intent": product_intent,
+            "category": category,
+            "subtype_context": signals,
+            "retrieval_count": len(candidates),
+            "compatible_count": next((s["count"] for s in steps[1:] if s["stage"].startswith("Наименование")), len(candidates)),
+            "remaining_count": len(remaining),
             "candidates": remaining[:MAX_CANDIDATES_OUT],
             "candidates_total": len(remaining),
             "errors": errors,
             "next_step": next_step,
+            "next_question": next_step,
             "ktru": ktru["code"] if ktru else None,
             "ktru_name": ktru["name"] if ktru else None,
             "steps": steps,
@@ -213,11 +231,12 @@ class Pipeline:
 
     def _extra_characteristics(self, text: str, category: str | None, taken: list[list[int]],
                                unmatched_numbers: list[dict], product_words: set,
-                               pool: list[dict], characteristics_ref: list[dict] = ()) -> tuple[list[dict], list[dict]]:
+                               pool: list[dict], characteristics_ref: list[dict] = (),
+                               product_intent: str | None = None) -> tuple[list[dict], list[dict], list[dict]]:
         """Features from the description that are not among the KTRU characteristics of the found products:
         the portal reference («цвет синий» → «Цвет»), otherwise a new characteristic
         («с противоскользящей рукояткой» → «Противоскользящая рукоятка: Да»). Nothing is dropped."""
-        extra, notices, taken = [], [], list(taken)
+        extra, notices, signals, taken = [], [], [], list(taken)
 
         def add(item: dict, source: str, span: list[int]) -> None:
             origin = "portal" if item.pop("portal", False) else "new"
@@ -253,6 +272,16 @@ class Pipeline:
         def is_taken(span):
             return any(a < span[1] and span[0] < b for a, b in taken)
 
+        for t in tokenize(text):
+            portal_value = self.portal.match(t["text"], category)
+            value_attribute = portal_value and portal_value["name"].lower().startswith(("цвет", "материал"))
+            if not is_taken(t["span"]) and pos(t["text"]) in ("ADJF", "PRTF") \
+                    and not value_attribute and self.portal.is_subtype(category, product_intent, t["lemma"]):
+                signals.append({"value": to_nominative([t["text"]]).capitalize(), "user_text": t["text"],
+                                "span": t["span"], "source": "portal", "used_for_narrowing": False,
+                                "used_for_reranking": True})
+                taken.append(t["span"])
+
         head_end = next((i for i, ch in enumerate(text) if ch in ",;\n" and not _between_digits(text, i)), len(text))
         groups, current = [], []
         for t in tokenize(text):
@@ -287,6 +316,14 @@ class Pipeline:
             span = [g[0]["span"][0], g[-1]["span"][1]]
             phrase = text[span[0]:span[1]]
             found = self.portal.match(phrase, category)
+            adjective = len(g) == 1 and pos(g[0]["text"]) in ("ADJF", "PRTF")
+            value_attribute = found and found["name"].lower().startswith(("цвет", "материал"))
+            subtype = adjective and not value_attribute and self.portal.is_subtype(category, product_intent, g[0]["lemma"])
+            if adjective and (subtype or not found):
+                signals.append({"value": to_nominative([g[0]["text"]]).capitalize(), "user_text": phrase,
+                                "span": span, "source": "portal" if subtype else "user",
+                                "used_for_narrowing": False, "used_for_reranking": True})
+                continue
             if found:
                 item = {**found, "portal": True}
             elif any(t["text"][0].isdigit() for t in g):  # «гарантия 3 года» → name + value
@@ -298,13 +335,14 @@ class Pipeline:
         moved = [f for f in characteristics_ref if f.get("origin") in ("portal", "new") and f not in extra]
         if extra or moved:
             product = pool[0]["name"] if len({c["name"] for c in pool}) == 1 else "найденных товаров"
-            listed = ", ".join(f"«{f['name']}»" for f in moved + extra)
+            listed = ", ".join(f"«{f['name']}»" for f in moved + extra if not f.get("used_for_narrowing"))
+            if not listed:
+                return extra, notices, signals
             notices.append({"type": "not_in_ktru", "severity": "info",
                             "characteristics": [f["name"] for f in moved + extra],
-                            "message": f"В КТРУ для «{product}» нет характеристик: {listed}. Они сохранены "
-                                       f"(источник — справочник Портала поставщиков или новая характеристика) "
-                                       f"и на выбор кода КТРУ не влияют."})
-        return extra, notices
+                            "message": f"Для «{product}» сохранены дополнительные признаки: {listed}. "
+                                       "Они не исключают коды КТРУ."})
+        return extra, notices, signals
 
     @staticmethod
     def _validate(request: dict) -> tuple[str, list[dict], list[dict]]:
@@ -351,4 +389,8 @@ class Pipeline:
         out["confidence"] = round(f["score"] / 100, 2)
         # origin (source hierarchy): KTRU → portal → new; answer — chosen by the user from KTRU options
         out["origin"] = f.get("origin") or ("answer" if f["method"] == "answer" else "ktru")
+        out["user_text"] = out.get("source")
+        out["source"] = "user" if out["origin"] in ("new", "answer") else out["origin"]
+        out["used_for_narrowing"] = bool(f.get("used_for_narrowing"))
+        out["used_for_reranking"] = bool(f.get("used_for_reranking"))
         return out
