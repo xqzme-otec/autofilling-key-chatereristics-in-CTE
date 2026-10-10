@@ -25,7 +25,7 @@ import numpy as np
 from rapidfuzz import fuzz, process
 
 from ml.ktru import KtruStore, is_bool_char, is_text_char
-from ml.text import main_noun, tokenize
+from ml.text import main_noun, pos, tokenize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SYNONYMS_PATH = DATA_DIR / "synonyms.json"
@@ -37,7 +37,8 @@ PREPOSITIONS = {"по", "для", "с", "из", "от", "на", "без"}
 NEGATIONS = {"без", "нет", "не", "отсутствовать"}
 NEGATIVE_VALUES = ("отсутств", "без ", "нет")
 FUZZY_MIN = 85
-EMB_MIN = 0.88
+PARTIAL_SCORE = 80
+EMB_MIN = 0.89
 EMB_MARGIN = 0.02
 STEM = 5
 WINDOW = 2  # сколько слов после названия характеристики считать её значением
@@ -61,6 +62,11 @@ class Segment:
     owner: list[int] = field(default_factory=list)         # номер токена, из которого получена лемма
     spans: list[list[int]] = field(default_factory=list)   # спаны токенов в тексте
     from_synonym: list[bool] = field(default_factory=list)
+    raw: list[str] = field(default_factory=list)            # lemma as written, aligned with `lemmas`
+
+    def surface(self, lemma_idx: int) -> str:
+        start, end = self.spans[self.owner[lemma_idx]]
+        return self.full[start:end]
 
     def source(self, lemma_idx: set) -> tuple[str, list[int]]:
         toks = sorted({self.owner[i] for i in lemma_idx})
@@ -133,7 +139,7 @@ class ValueMatcher:
     def _segments(self, text: str, reserved: list[list[int]] = ()) -> list[Segment]:
         segs = []
         taken = {tuple(s) for s in reserved}
-        for m in re.finditer(r"[^,;.\n]+", text):
+        for m in re.finditer(r"(?:[^,;.\n]|(?<=\d)[.,](?=\d))+", text):
             toks = [t for t in tokenize(m.group()) if t["text"][0].isalnum()
                     and (m.start() + t["span"][0], m.start() + t["span"][1]) not in taken]
             if not toks:
@@ -146,6 +152,7 @@ class ValueMatcher:
                     seg.lemmas.append(l)
                     seg.owner.append(ti)
                     seg.from_synonym.append(syn is not None and syn != [t["lemma"]])
+                    seg.raw.append(t["lemma"])
             segs.append(seg)
         return segs
 
@@ -154,6 +161,21 @@ class ValueMatcher:
         return [i for i, l in enumerate(lemmas) if any(_stem_eq(l, k) for k in keys)]
 
     # ---------- сопоставление ----------
+
+    def _exact_values(self, seg: Segment, info: CharInfo) -> list[tuple[str, set]]:
+        """All values of a characteristic written exactly in the fragment, on disjoint words."""
+        out, used = [], set()
+        for value, vlem in sorted(info.value_lemmas.items(), key=lambda kv: -len(kv[1].split())):
+            n = len(vlem.split())
+            if vlem.replace(" ", "").isdigit():
+                continue
+            for i in range(len(seg.lemmas) - n + 1):
+                idx = set(range(i, i + n))
+                if " ".join(seg.lemmas[i:i + n]) == vlem and not idx & used:
+                    if all(vlem != info.value_lemmas[v] for v, _ in out):
+                        out.append((value, idx))
+                    used |= idx
+        return out
 
     def _match_enum(self, seg: Segment, info: CharInfo) -> tuple[str, int, str, set] | None:
         """→ (значение, оценка, способ, номера использованных лемм) или None."""
@@ -168,6 +190,10 @@ class ValueMatcher:
             if vlem in grams:
                 i = grams.index(vlem)
                 return value, 100, "exact", set(range(i, i + n))
+            raw_grams = [" ".join(seg.raw[i:i + n]) for i in range(len(seg.raw) - n + 1)]
+            if vlem in raw_grams:  # the word as written is the value («лето» = «Лето», though a synonym maps it to «летний»)
+                i = raw_grams.index(vlem)
+                return value, 100, "exact", set(range(i, i + n))
             # «без капюшона» → «Тип капюшона: Отсутствует»
             if value.lower().startswith(NEGATIVE_VALUES) and key_hits:
                 neg = [i for i in range(len(lemmas)) if lemmas[i] in NEGATIONS and any(0 < k - i <= 2 for k in key_hits)]
@@ -180,13 +206,19 @@ class ValueMatcher:
                 if best is None or best[1] < 88:
                     best = (value, 88, "alias", {alias[0]})
                 continue
-            core = vlem.split()[1] if n == 2 and vlem.split()[0] in PREPOSITIONS else (vlem if n == 1 else None)
+            # «По бетону» ~ «бетон»; but «Без обивки» is an absence, «без» must not be stripped
+            core = vlem.split()[1] if n == 2 and vlem.split()[0] in PREPOSITIONS - {"без"} else (vlem if n == 1 else None)
             if core:  # «нитриловые» ~ «Нитрил», «бетон» ~ «По бетону»
                 stem_hits = [i for i, l in enumerate(lemmas) if _stem_eq(l, core)]
                 if stem_hits:
                     if best is None or best[1] < FUZZY_MIN:
                         best = (value, FUZZY_MIN, "stem", {stem_hits[0]})
                     continue
+            head = vlem.split()[0]
+            if n >= 2 and head not in PREPOSITIONS and len(head) >= 4:  # broader word for a specific value
+                head_hits = [i for i, l in enumerate(lemmas) if _stem_eq(l, head)]
+                if head_hits and (best is None or best[1] < PARTIAL_SCORE):
+                    best = (value, PARTIAL_SCORE, "partial", {head_hits[0]})
             if len(vlem) < 5 or not grams:  # короткие (ЛДСП, МДФ) — только точно
                 continue
             _, score, i = process.extractOne(vlem, grams, scorer=fuzz.ratio)
@@ -214,7 +246,12 @@ class ValueMatcher:
         used = set(hits) | set(neg)
         if not neg and i > 0 and lemmas[i - 1] in ("с", "на", "со"):  # для читаемого source: «на колесиках»
             used.add(i - 1)
+        # the same feature both with and without negation
+        signs = {any(lemmas[j] in NEGATIONS for j in range(max(0, h - 2), h)) for h in hits}
+        self._bool_conflict = len(signs) > 1
         return ("Нет" if neg else "Да"), used
+
+    _bool_conflict = False
 
     def match(self, text: str, codes: list[str], reserved: list[list[int]] = ()) -> tuple[list[dict], list[dict], list[dict]]:
         """→ (характеристики, ошибки, нормализации для corrections).
@@ -225,6 +262,7 @@ class ValueMatcher:
         noun = main_noun(text.split(",")[0])
         found: dict[str, dict] = {}
         errors: list[dict] = []
+        self.last_consumed = []  # spans of words used by KTRU matches and errors (for features outside KTRU)
 
         for seg_no, seg in enumerate(self._segments(text, reserved)):
             matches = []
@@ -234,10 +272,24 @@ class ValueMatcher:
                     if m is None:
                         continue
                     value, used = m
+                    if self._bool_conflict:
+                        src, span = seg.source(set(self._key_hits(seg.lemmas, info.keys)) | used)
+                        errors.append({"type": "contradiction", "characteristic": info.name, "source": seg.text,
+                                       "span": [seg.start, seg.start + len(seg.text)],
+                                       "message": f"Противоречие: в описании указано и наличие, и отсутствие "
+                                                  f"(«{info.name}»). Оставьте один вариант."})
+                        continue
                     if value not in info.values:
                         continue  # «без подлокотников», а у товаров бывает только «Да» — решит сужение
                     score, method = 90, "keyword"
                 else:
+                    exact = self._exact_values(seg, info)
+                    if len(exact) > 1:
+                        names = ", ".join(f"«{v}»" for v, _ in exact)
+                        errors.append({"type": "multiple_values", "severity": "warning", "characteristic": info.name,
+                                       "source": seg.text, "span": [seg.start, seg.start + len(seg.text)],
+                                       "message": f"Для характеристики «{info.name}» указано несколько значений: "
+                                                  f"{names}. Если это не опечатка, уточните, какое верно."})
                     m = self._match_enum(seg, info)
                     if m is None:
                         continue
@@ -248,27 +300,36 @@ class ValueMatcher:
                         method = "name"  # «Вид товара = Шкаф» — повторяет сам товар, кандидатов не отсекает
                 named = any(i not in used for i in self._key_hits(seg.lemmas, info.keys))
                 best_rank = min(rank[c] for c in info.values[value])
-                matches.append((named, score, -best_rank, info, value, method, used))
+                # ties: the more general characteristic («Вид материала обивки», not «…обивки спинки»)
+                matches.append((named, score, -len(info.keys), -best_rank, info, value, method, used))
 
             # одно слово — одной характеристике: «на металлическом каркасе» — «Тип каркаса»
             # (каркас назван явно), а не «Вид материала спинки»; затем по оценке и рангу товара
             taken: set = set()
             accepted = []
-            for mt in sorted(matches, key=lambda m: m[:3], reverse=True):
-                if mt[6] & taken:
+            for mt in sorted(matches, key=lambda m: m[:4], reverse=True):
+                if mt[7] & taken:
                     continue
-                taken |= mt[6]
+                taken |= mt[7]
                 accepted.append(mt)
+            accepted = [(m[0], m[1], m[3], m[4], m[5], m[6], m[7]) for m in accepted]  # drop the tie-break field
 
             accepted, seg_errors = self._check_named(seg, chars, accepted, product_words)
             errors += seg_errors
 
             for named, score, _, info, value, method, used in accepted:
+                key_idx = set(self._key_hits(seg.lemmas, info.keys)) | used
+                self.last_consumed.append(seg.source(key_idx)[1])
                 prev = found.get(info.name)
                 if prev is None or score > prev["score"]:
                     src, span = seg.source(used)
+                    codes_ok = set(info.values[value])
+                    if method == "partial":  # «стекло» fits «Стекло закаленное» and «Стекло тонированное» alike
+                        head = info.value_lemmas[value].split()[0]
+                        codes_ok = set().union(*(info.values[v] for v, vl in info.value_lemmas.items()
+                                                 if _stem_eq(vl.split()[0], head)))
                     found[info.name] = {"name": info.name, "value": value, "unit": None, "source": src, "span": span,
-                                        "method": method, "score": score, "codes": sorted(info.values[value])}
+                                        "method": method, "score": score, "codes": sorted(codes_ok)}
 
             if not accepted and not seg_errors and seg_no > 0:  # первый фрагмент — название товара
                 emb = self._match_embedding(seg, chars)
@@ -300,19 +361,24 @@ class ValueMatcher:
                 continue
             hits = self._key_hits(lemmas, info.keys)
             matched = {k for k in info.keys if any(_stem_eq(lemmas[i], k) for i in hits)}
-            if not hits or len(matched) * 2 <= len(info.keys) and len(info.keys) > 1:
+            numeric = all(vl.replace(" ", "").isdigit() for vl in info.value_lemmas.values())
+            # numeric lists («Российский размер»: 40, 42, …) — one key word is enough: «размер 300»
+            if not hits or (not numeric and len(matched) * 2 <= len(info.keys) and len(info.keys) > 1):
                 continue  # «комплектация» не называет «Количество аккумуляторов в комплекте»
             if any(lemmas[j] in NEGATIONS for j in range(max(0, hits[0] - 2), hits[0])):
                 continue
             # «цвет сиденья синий», «толщина сидения 16 мм» — перед ключевым словом другой признак,
             # значит, речь о другой характеристике, а не о «Вид материала сиденья»
+            # an adjective right before the key word is its value («деревянным бойком»); a noun is another attribute
             name_lemmas = set(_lemmas(info.name))
             if any(lemmas[j].isalpha() and lemmas[j] not in name_lemmas | GENERIC | product_words | PREPOSITIONS
+                   and (j < hits[0] - 1 or pos(seg.surface(j)) == "NOUN")
                    for j in range(0, hits[0])):
                 continue
             window = {j for h in hits for j in range(h + 1, h + WINDOW + 1)} | {hits[0] - 1}
             window = sorted(j for j in window if 0 <= j < len(lemmas) and j not in hits
-                            and lemmas[j].isalpha() and lemmas[j] not in GENERIC and lemmas[j] not in NEGATIONS
+                            and (lemmas[j].isalpha() or (numeric and lemmas[j].replace(".", "").isdigit()))
+                            and lemmas[j] not in GENERIC and lemmas[j] not in NEGATIONS
                             and lemmas[j] not in product_words
                             and not any(_stem_eq(lemmas[j], k) for k in all_keys)
                             and not (j in used_by and used_by[j][0]))  # слово занято явно названной характеристикой
@@ -326,6 +392,7 @@ class ValueMatcher:
                 continue
             src, span = seg.source(set(window))
             err = self._not_allowed(info, src, span)
+            self.last_consumed.append(seg.source(set(window) | set(hits))[1])
             hint = process.extractOne(" ".join(lemmas[j] for j in window), info.value_lemmas, scorer=fuzz.ratio)
             if hint and hint[1] >= 60:
                 err["suggestion"] = hint[2]

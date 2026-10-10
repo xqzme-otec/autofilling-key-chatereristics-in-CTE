@@ -86,18 +86,16 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
         remaining = [c for c in remaining if c["code"] == code_answer] or remaining
         steps.append({"stage": f"Выбран код {code_answer}", "count": len(remaining)})
 
-    # 2. характеристики
+    # 2. характеристики. Hard drop only on a direct contradiction with KTRU; a candidate that lacks the
+    # characteristic stays (soft penalty: it goes after the matching ones). Suspicious values do not narrow.
     for f in characteristics:
+        if f.get("suspicious") or f.get("origin") in ("portal", "new"):
+            continue
         has = [c for c in remaining if _char(store, c["code"], f["name"])]
         if not has:
             continue  # ни у кого из оставшихся нет такой характеристики — не сужает
         ok = [c for c in has if c["code"] in f["codes"]]
-        if f.get("method") == "name" and ok:
-            # повтор названия («Вид товара = Шкаф»): отсекаем только противоречащих, а не тех, у кого её нет
-            ok += [c for c in remaining if c not in has]
-            ok.sort(key=remaining.index)
-            if len(ok) == len(remaining):
-                continue
+        lacking = [c for c in remaining if c not in has]
         label = f"{f['name']} = {f['value']}" + (f" {f['unit']}" if f.get("unit") else "")
         if not ok:
             allowed = sorted({o for c in has for o in _options(_char(store, c["code"], f["name"]))})
@@ -107,7 +105,10 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
                                       f"Допустимые значения: {shown}. Характеристика не учтена."})
             f["conflict"] = True
             continue
-        remaining = ok
+        new_remaining = ok + lacking
+        if len(new_remaining) == len(remaining) and [c["code"] for c in new_remaining] == [c["code"] for c in remaining]:
+            continue
+        remaining = new_remaining
         steps.append({"stage": label, "count": len(remaining)})
 
     # 3. результат или следующий вопрос
@@ -142,6 +143,17 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
         "options": options,
         "required": required,
     }, steps, errors
+
+
+def missing_required(remaining: list[dict], characteristics: list[dict], store: KtruStore, limit: int = 10) -> list[str]:
+    """Required KTRU characteristics of the remaining positions that the description does not specify."""
+    filled = {f["name"] for f in characteristics if not f.get("conflict")}
+    counts: dict[str, int] = {}
+    for c in remaining:
+        for ch in store.by_code[c["code"]]["characteristics"]:
+            if ch["required"] and ch["name"] not in filled:
+                counts[ch["name"]] = counts.get(ch["name"], 0) + 1
+    return sorted(counts, key=lambda n: -counts[n])[:limit]
 
 
 def _best_question(remaining: list[dict], filled: set, store: KtruStore):

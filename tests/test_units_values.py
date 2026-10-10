@@ -13,31 +13,31 @@ def store():
 
 
 def test_number_mapped_to_ktru_range(store):
-    found, errors, _ = NumberMatcher(store).match("молоток массой 0.5 кг", [HAMMER])
+    found, errors, _, _ = NumberMatcher(store).match("молоток массой 0.5 кг", [HAMMER])
     assert [(f["name"], f["value"], f["unit"]) for f in found] == [("Масса молотка", "0.4–0.8", "Килограмм")]
     assert errors == []
 
 
 def test_suspicious_value_in_open_range(store):
-    found, errors, _ = NumberMatcher(store).match("молоток массой 50 кг", [HAMMER])
+    found, errors, _, _ = NumberMatcher(store).match("молоток массой 50 кг", [HAMMER])
     assert found[0]["value"] == "≥ 2.5"
     assert [(e["type"], e["severity"]) for e in errors] == [("suspicious_value", "warning")]
 
 
 def test_unit_mismatch(store):
-    found, errors, _ = NumberMatcher(store).match("молоток, длина рукоятки 2 кг", [HAMMER])
+    found, errors, _, _ = NumberMatcher(store).match("молоток, длина рукоятки 2 кг", [HAMMER])
     assert found == []
     assert [e["type"] for e in errors] == ["unit_mismatch"]
 
 
 def test_article_number_is_not_a_value(store):
-    found, errors, _ = NumberMatcher(store).match("молоток STAYER 202815 массой 0.5 кг", [HAMMER])
+    found, errors, _, _ = NumberMatcher(store).match("молоток STAYER 202815 массой 0.5 кг", [HAMMER])
     assert [f["source"] for f in found] == ["0.5 кг"]
     assert errors == []
 
 
 def test_number_is_reserved_for_text_matching(store):
-    _, _, reserved = NumberMatcher(store).match("молоток массой 0.5 кг", [HAMMER])
+    _, _, reserved, _ = NumberMatcher(store).match("молоток массой 0.5 кг", [HAMMER])
     text = "молоток массой 0.5 кг"
     assert any(text[s:e] == "0.5" for s, e in reserved)
 

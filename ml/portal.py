@@ -21,7 +21,8 @@ RAW_DIR = ROOT / "data" / "raw" / "supplier_portal"
 DICT_PATH = ROOT / "data" / "processed" / "portal_characteristics.json"
 CATEGORIES = {"Инструменты": "инструменты", "Мебель": "мебель", "Одежда": "одежда"}
 MIN_USAGE = 2          # характеристика должна встречаться хотя бы в 2 категориях Портала (КПГЗ)
-MAX_VALUES = 60        # значений на характеристику храним не больше
+MAX_VALUES = 300       # значений на характеристику храним не больше
+MIN_VALUES_TO_CHECK = 5  # check a value against the portal list only when the list is substantial
 SKIP_NAMES = {"артикул", "модель", "производитель", "страна происхождения", "бренд", "торговая марка",
               "гарантийный срок", "срок гарантии", "описание", "комплектация"}
 
@@ -69,6 +70,7 @@ def build() -> None:
 class PortalMatcher:
     def __init__(self, path: Path = DICT_PATH):
         self.by_category: dict[str, list[tuple[list[str], str, dict]]] = {}
+        self.usage: dict[str, dict[str, int]] = {}
         self.value_index: dict[str, dict[str, set]] = {}
         if not path.exists():
             return  # словаря нет — уровень «Портал» пропускается, остаётся «новая»
@@ -77,14 +79,16 @@ class PortalMatcher:
             # длинные названия проверяем первыми: «Цвет сиденья» раньше, чем «Цвет»
             names = sorted(((_lemmas(n), n, info) for n, info in chars.items()), key=lambda x: -len(x[0]))
             self.by_category[category] = [x for x in names if x[0]]
-            self.usage = getattr(self, "usage", {})
             self.usage[category] = {n: info["usage"] for n, info in chars.items()}
-            index: dict[str, set] = defaultdict(set)
+            index: dict[str, dict] = defaultdict(dict)  # value lemmas → {characteristic: value as on the portal}
             for name, info in chars.items():
                 if info["kind"] in ("Текст", "Справочник"):
                     for v in info["values"]:
-                        index[" ".join(_lemmas(v))].add(name)
+                        index[" ".join(_lemmas(v))].setdefault(name, v)
             self.value_index[category] = index
+
+    def has(self, category: str | None, name: str) -> bool:
+        return bool(category) and name in self.usage.get(category, {})
 
     @property
     def available(self) -> bool:
@@ -100,14 +104,35 @@ class PortalMatcher:
         for name_lemmas, name, info in self.by_category[category]:
             n = len(name_lemmas)
             if lemmas[:n] == name_lemmas and len(lemmas) > n:
+                # «Тип патрона», «Вид материала»: a genitive noun continues a longer name, it is not a value
+                if _is_genitive_noun(toks[n]["text"]):
+                    continue
                 value = segment[toks[n]["span"][0]:].strip()
-                return {"name": name, "value": value, "unit": info["unit"] if not _has_unit(value) else None}
+                out = {"name": name, "value": value, "unit": info["unit"] if not _has_unit(value) else None}
+                # a portal reference list exists and the value is far from all of it: «куртка, материал бетон»
+                # only against a complete list: a list cut at MAX_VALUES may simply miss a real value
+                if info["kind"] in ("Справочник", "Текст") and MIN_VALUES_TO_CHECK <= len(info["values"]) < MAX_VALUES:
+                    from rapidfuzz import fuzz, process
+                    value_lem = " ".join(lemmas[n:])
+                    known = [" ".join(_lemmas(v)) for v in info["values"]]
+                    best = process.extractOne(value_lem, known, scorer=fuzz.token_set_ratio)
+                    if not best or best[1] < 70:
+                        out["unknown_value"] = True
+                        out["known_values"] = info["values"][:8]
+                return out
         # 2. фрагмент — известное значение характеристики: «синий» → «Цвет» (короткое и употребимое название)
-        names = self.value_index[category].get(" ".join(lemmas), set())
-        if names:
+        names = self.value_index[category].get(" ".join(lemmas), {})
+        if names and not any(ch.isdigit() for ch in segment):
             name = min(names, key=lambda n: (len(n.split()), -self.usage[category].get(n, 0)))
-            return {"name": name, "value": segment.strip(), "unit": None}
+            value = names[name]
+            return {"name": name, "value": value[:1].upper() + value[1:], "unit": None}
         return None
+
+
+def _is_genitive_noun(word: str) -> bool:
+    from ml.text import _morph
+    p = _morph.parse(word.lower())[0]
+    return p.tag.POS == "NOUN" and p.tag.case == "gent"
 
 
 def _has_unit(value: str) -> bool:
