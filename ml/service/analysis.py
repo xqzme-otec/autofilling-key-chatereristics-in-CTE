@@ -26,7 +26,7 @@ from ml.fit import ProductFit
 from ml.newchar import INVALID, MODEL_PATH, UNCERTAIN, NewCharClassifier
 from ml.service.holder import PipelineHolder
 from ml.service.repository import NewCharacteristicsRepository
-from ml.text import lemmatize_phrase
+from ml.text import lemmatize_phrase, main_noun
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,8 @@ class AnalysisService:
         classifier = self._new_char_classifier()
         shown = result.get("ktru_name") or product
         for ch in portal if classifier is not None else []:
+            if main_noun(str(ch["value"])) == product:
+                continue  # «куртка» -> «Вид санитарной одежды: Куртка»: the product itself, not a user's characteristic
             cards = classifier.portal_cards_without(category, product, ch["name"])
             if cards:
                 errors.append(_not_fitting(ch["name"], f"«{ch['name']}» не встречается ни в одной из {cards} карточек "

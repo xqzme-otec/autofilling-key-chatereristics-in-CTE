@@ -156,6 +156,27 @@ def test_classifier_judges_what_the_rules_let_through(tmp_path, monkeypatch):
     assert {key for _, _, key, _ in repository.rows} == {"противоскользящий рукоятка"}  # only the valid one
 
 
+def test_portal_characteristic_absent_from_the_product_cards_is_warned(monkeypatch):
+    class Cards:
+        def portal_cards_without(self, category, product, name):
+            return 120 if name in ("Разрешение экрана", "Вид инструмента") else None
+
+        def predict(self, items):
+            return [("valid", 0.9) for _ in items]
+
+    monkeypatch.setattr("ml.service.analysis.AnalysisService._new_char_classifier", lambda self: Cards())
+    result = result_with("инструменты")
+    result["characteristics"] += [
+        {"name": "Разрешение экрана", "value": "4K", "unit": None, "origin": "portal", "confidence": 0.8},
+        {"name": "Вид инструмента", "value": "Молоток", "unit": None, "origin": "portal", "confidence": 0.8},
+        {"name": "Цвет", "value": "Черный", "unit": None, "origin": "portal", "confidence": 0.8}]
+    with client(result, None, Store()) as c:
+        r = c.post("/analyze", json={"raw": "молоток", "answers": []}).json()
+    # «Вид инструмента: Молоток» is the product itself, not a characteristic the user wrote
+    assert [(e["characteristic"], e["checked_by"]) for e in r["errors"] if e.get("checked_by")] == \
+        [("Разрешение экрана", "portal_cards")]
+
+
 def test_unreachable_postgres_degrades(caplog):
     caplog.set_level(logging.INFO)
     with client(result_with("инструменты", "Противоскользящая рукоятка"),
