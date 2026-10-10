@@ -31,7 +31,9 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SYNONYMS_PATH = DATA_DIR / "synonyms.json"
 ALIASES_PATH = DATA_DIR / "value_aliases.json"
 GENERIC = {"наличие", "функция", "тип", "элемент", "вид", "количество", "покрытие", "материал", "конструкция",
-           "товар", "изделие", "наименование", "признак", "особенность", "для", "с", "и", "в", "на", "из"}
+           "товар", "изделие", "наименование", "признак", "особенность", "максимальный", "минимальный",
+           "номинальный", "общий", "для", "с", "и", "в", "на", "из", "по"}
+PREPOSITIONS = {"по", "для", "с", "из", "от", "на", "без"}
 NEGATIONS = {"без", "нет", "не", "отсутствовать"}
 NEGATIVE_VALUES = ("отсутств", "без ", "нет")
 FUZZY_MIN = 85
@@ -160,6 +162,9 @@ class ValueMatcher:
         for value, vlem in info.value_lemmas.items():
             n = len(vlem.split())
             grams = [" ".join(lemmas[i:i + n]) for i in range(len(lemmas) - n + 1)]
+            if vlem.replace(" ", "").replace(".", "").replace(",", "").isdigit() and not key_hits and len(lemmas) > n:
+                continue  # число — значение («Ростовая группа: 5», «Размер: 48»), только если характеристика
+                          # названа («ростовая группа 5») или число стоит отдельным фрагментом («куртка, 48»)
             if vlem in grams:
                 i = grams.index(vlem)
                 return value, 100, "exact", set(range(i, i + n))
@@ -175,8 +180,9 @@ class ValueMatcher:
                 if best is None or best[1] < 88:
                     best = (value, 88, "alias", {alias[0]})
                 continue
-            if n == 1:  # «нитриловые» ~ «Нитрил»
-                stem_hits = [i for i, l in enumerate(lemmas) if _stem_eq(l, vlem)]
+            core = vlem.split()[1] if n == 2 and vlem.split()[0] in PREPOSITIONS else (vlem if n == 1 else None)
+            if core:  # «нитриловые» ~ «Нитрил», «бетон» ~ «По бетону»
+                stem_hits = [i for i, l in enumerate(lemmas) if _stem_eq(l, core)]
                 if stem_hits:
                     if best is None or best[1] < FUZZY_MIN:
                         best = (value, FUZZY_MIN, "stem", {stem_hits[0]})
@@ -202,6 +208,8 @@ class ValueMatcher:
         if len(matched) < len(info.keys) and any(self._key_df.get(k[:STEM], 0) > 1 for k in matched):
             return None  # частичное совпадение по неразличающему слову
         i = hits[0]
+        if len(matched) < len(info.keys) and i + 1 < len(lemmas) and lemmas[i + 1][:1].isdigit():
+            return None  # «высотой 5 метров» — это размер, а не «Регулировка по высоте: Да»
         neg = [j for j in range(max(0, i - 2), i) if lemmas[j] in NEGATIONS]
         used = set(hits) | set(neg)
         if not neg and i > 0 and lemmas[i - 1] in ("с", "на", "со"):  # для читаемого source: «на колесиках»
@@ -291,7 +299,16 @@ class ValueMatcher:
             if info.is_bool or info.name in matched_names:
                 continue
             hits = self._key_hits(lemmas, info.keys)
-            if not hits or any(lemmas[j] in NEGATIONS for j in range(max(0, hits[0] - 2), hits[0])):
+            matched = {k for k in info.keys if any(_stem_eq(lemmas[i], k) for i in hits)}
+            if not hits or len(matched) * 2 <= len(info.keys) and len(info.keys) > 1:
+                continue  # «комплектация» не называет «Количество аккумуляторов в комплекте»
+            if any(lemmas[j] in NEGATIONS for j in range(max(0, hits[0] - 2), hits[0])):
+                continue
+            # «цвет сиденья синий», «толщина сидения 16 мм» — перед ключевым словом другой признак,
+            # значит, речь о другой характеристике, а не о «Вид материала сиденья»
+            name_lemmas = set(_lemmas(info.name))
+            if any(lemmas[j].isalpha() and lemmas[j] not in name_lemmas | GENERIC | product_words | PREPOSITIONS
+                   for j in range(0, hits[0])):
                 continue
             window = {j for h in hits for j in range(h + 1, h + WINDOW + 1)} | {hits[0] - 1}
             window = sorted(j for j in window if 0 <= j < len(lemmas) and j not in hits

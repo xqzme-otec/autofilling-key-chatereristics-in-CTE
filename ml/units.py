@@ -53,6 +53,9 @@ NUMBER_RE = re.compile(
 GENERIC = {"наличие", "тип", "вид", "количество", "число", "максимальный", "минимальный", "общий",
            "без", "учет", "предельный", "отклонение", "для", "с", "и", "в", "на", "из", "до", "по", "мм", "см"}
 CONTEXT_BEFORE, CONTEXT_AFTER = 3, 2
+# значение в открытом диапазоне КТРУ («≥ 100 Сантиметр»), которое дальше самой крайней границы
+# в столько раз, считаем подозрительным: «стол высотой 5 метров», «молоток 50 кг»
+SUSPICIOUS_FACTOR = 3
 
 
 def _num(s: str) -> float:
@@ -70,6 +73,13 @@ def contains(v: dict, x: float) -> bool:
     if hi is not None and (x > hi or (x == hi and not v.get("max_incl", True))):
         return False
     return True
+
+
+def _inside_code(text: str, m: re.Match) -> bool:
+    """Число — часть кода модели/артикула: вплотную к буквам, дефисам, слэшам («П-30-950», «2930-H5», «HR2450FT»)."""
+    before = text[m.start() - 1] if m.start() > 0 else " "
+    after = text[m.end()] if m.end() < len(text) else " "
+    return before.isalpha() or before in "-/_" or after in "-/_" or (after.isalpha() and not m.group("unit"))
 
 
 def _user_unit(raw: str | None):
@@ -113,6 +123,7 @@ class NumberMatcher:
         """→ (характеристики, ошибки, спаны слов, занятых числами — их не берут текстовые характеристики)."""
         chars = self._num_chars(codes)
         rank = {c: i for i, c in enumerate(codes)}
+        product_words = {t["lemma"] for c in codes for t in tokenize(self.store.by_code[c]["name"])}
         found, errors, reserved = [], [], []
         tokens = tokenize(text)
 
@@ -127,9 +138,11 @@ class NumberMatcher:
                            and t["text"][0].isalpha()][-CONTEXT_BEFORE:]
                           + [t for t in tokens if m.end() <= t["span"][0] and t["span"][1] <= seg_end
                              and t["text"][0].isalpha()][:CONTEXT_AFTER])
-            context = [t["lemma"] for t in ctx_tokens]
+            context = [t["lemma"] for t in ctx_tokens if t["lemma"] not in product_words]
             source = text[m.start():m.end()].strip()
             span = [m.start(), m.start() + len(source)]
+            if unit is None and (len(m.group("a").split(".")[0].split(",")[0]) >= 5 or _inside_code(text, m)):
+                continue  # «RUKO 108225», «П-30-950» — артикул или модель, а не значение
 
             scored = [(self._key_score(context, info["keys"]), name, info) for name, info in chars.items()]
             named = [x for x in scored if x[0] > 0]
@@ -150,12 +163,14 @@ class NumberMatcher:
             compatible = [x for x in options if unit is None or KTRU_UNITS.get(x[2]["unit"], (None,))[0] == unit[0]]
             if not compatible:
                 name, info = options[0][1], options[0][2]
+                reserved += [t["span"] for t in tokens if span[0] <= t["span"][0] and t["span"][1] <= span[1]]
                 errors.append({"type": "unit_mismatch", "characteristic": name, "source": source, "span": span,
                                "message": f"Единица «{m.group('unit')}» не подходит для характеристики «{name}» "
                                           f"(ожидается {info['unit'] or 'безразмерное число'})."})
                 continue
             name = min(compatible, key=lambda x: min(rank[c] for c in x[2]["by_code"]))[1]
             entry, err = self._resolve(name, chars[name], a, b, unit, source, span, rank)
+            reserved += [t["span"] for t in tokens if span[0] <= t["span"][0] and t["span"][1] <= span[1]]
             if entry:
                 found.append(entry)
             if err:
@@ -168,7 +183,7 @@ class NumberMatcher:
 
     @staticmethod
     def _resolve(name, info, a, b, unit, source, span, rank):
-        codes, best = [], None
+        codes, best, warning = [], None, None
         for code, (ktru_unit, values) in sorted(info["by_code"].items(), key=lambda kv: rank[kv[0]]):
             dim, factor = KTRU_UNITS.get(ktru_unit, (None, 1))
             conv = (lambda x: x * unit[1] / factor) if unit and dim == unit[0] else (lambda x: x)
@@ -181,6 +196,7 @@ class NumberMatcher:
                 if best is None:
                     user_val = _fmt(xa) + (f"–{_fmt(xb)}" if xb is not None else "")
                     best = (format_value(hit), ktru_unit, user_val)
+                    warning = _suspicious(name, hit, values, xb if xb is not None else xa, xa, ktru_unit, source, span)
         if best is None:
             ktru_unit, values = next(iter(info["by_code"].values()))
             allowed = ", ".join(format_value(v, ktru_unit) for v in values[:12]) + (" …" if len(values) > 12 else "")
@@ -189,4 +205,22 @@ class NumberMatcher:
                                      f"Допустимые: {allowed}."}
         value, ktru_unit, user_val = best
         return {"name": name, "value": value, "unit": ktru_unit, "user_value": f"{user_val} {ktru_unit or ''}".strip(),
-                "source": source, "span": span, "method": "number", "score": 95, "codes": codes}, None
+                "source": source, "span": span, "method": "number", "score": 95, "codes": codes}, warning
+
+
+def _suspicious(name, hit, values, hi_x, lo_x, unit, source, span) -> dict | None:
+    """Значение формально попало в открытый диапазон КТРУ, но слишком далеко от его границы."""
+    bounds = [b for v in values for b in (v.get("min"), v.get("max")) if b is not None]
+    if not bounds:
+        return None
+    top, bottom = max(bounds), min(b for b in bounds if b > 0) if any(b > 0 for b in bounds) else None
+    u = f" {unit}" if unit else ""
+    if hit.get("max") is None and top > 0 and hi_x >= SUSPICIOUS_FACTOR * top:
+        detail = f"это в {_fmt(hi_x / top)} раз больше самой крупной границы КТРУ ({_fmt(top)}{u})"
+    elif hit.get("min") is None and bottom and 0 < lo_x <= bottom / SUSPICIOUS_FACTOR:
+        detail = f"это в {_fmt(bottom / lo_x)} раз меньше самой мелкой границы КТРУ ({_fmt(bottom)}{u})"
+    else:
+        return None
+    return {"type": "suspicious_value", "severity": "warning", "characteristic": name, "source": source, "span": span,
+            "message": f"Значение «{source}» для характеристики «{name}» выглядит подозрительно: {detail}. "
+                       f"Проверьте число и единицу измерения."}

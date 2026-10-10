@@ -39,7 +39,9 @@ def evaluate(pipe: Pipeline, cases: list[dict], verbose: bool = False) -> dict:
         final += c["ktru"] in [x["code"] for x in res["candidates"]] + [res["ktru"]]
         not_found += any(e["type"] == "product_not_found" for e in res["errors"])
 
-        pred = {(x["name"], x["value"]) for x in res["characteristics"] if x["method"] != "name"}
+        # оцениваем характеристики КТРУ; портал и новые — вне КТРУ, их нет у кода по определению
+        pred = {(x["name"], x["value"]) for x in res["characteristics"]
+                if x["method"] != "name" and x.get("origin", "ktru") == "ktru"}
         gold = set(c["chars"].items())
         # точность: значение допустимо для правильного кода (в эталоне не все верные характеристики —
         # например, «Тип каркаса = Деревянный» из названия «Стул на деревянном каркасе»)

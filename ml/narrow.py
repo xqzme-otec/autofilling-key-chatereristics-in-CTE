@@ -76,7 +76,8 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
             stage = f"Наименование содержит «{noun}»"
         else:
             keep = names
-        if keep and len(keep) < len(names):
+        if keep and keep != names or covered or (noun and keep):
+            # шаг пишем и без сокращения: он подтверждает, что товар определён по наименованию
             remaining = [c for c in remaining if c["name"] in keep]
             steps.append({"stage": stage, "count": len(remaining)})
 

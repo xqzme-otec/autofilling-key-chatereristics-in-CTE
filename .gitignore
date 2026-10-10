@@ -48,3 +48,4 @@ docs/reports/
 .venv/
 data/cache/
 eval/cases_ktru.jsonl
+eval/cases_portal.jsonl
