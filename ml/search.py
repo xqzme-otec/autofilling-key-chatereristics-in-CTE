@@ -81,6 +81,8 @@ class Searcher:
             "document_strategy": DOCUMENT_STRATEGY,
             "document_strategy_version": DOCUMENT_STRATEGY_VERSION,
             "dataset_hash": self._dataset_hash(),
+            # what is actually encoded: changes when loader filters change, even if the parquet file does not
+            "passages_hash": hashlib.sha256("\n".join(self.passages).encode()).hexdigest(),
             "embedding_dim": None,
         }
 

@@ -16,6 +16,7 @@ from symspellpy import SymSpell, Verbosity
 
 from ml.ktru import KtruStore
 from ml.text import is_known, lemma, pos, tokenize, word_forms
+from ml.units import UNIT_WORDS, USER_UNITS
 from ml.values import load_synonyms
 
 EN = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`"
@@ -28,7 +29,8 @@ LAYOUT_RE = re.compile(r"[A-Za-z\[\];',.`]*[A-Za-z][A-Za-z\[\];',.`]*")
 class Corrector:
     def __init__(self, store: KtruStore):
         # синонимы («кожзам», «хб») — тоже правильные слова, хоть их и нет в КТРУ
-        self.vocab = store.vocab + Counter(load_synonyms().keys())
+        # synonyms («кожзам», «хб») and unit words («мкг», «квт») are valid words too, though not in KTRU
+        self.vocab = store.vocab + Counter(load_synonyms().keys()) + Counter(USER_UNITS.keys()) + Counter(UNIT_WORDS)
         self.sym = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
         # в словарь исправлений — все формы слов КТРУ, чтобы «тубмой» исправлялось в «тумбой»
         for word, freq in self.vocab.items():

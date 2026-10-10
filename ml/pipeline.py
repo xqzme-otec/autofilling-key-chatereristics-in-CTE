@@ -24,10 +24,13 @@ from __future__ import annotations
                        сохраняем, не выбрасываем) | answer (выбрана пользователем из вариантов КТРУ);
     candidates       — оставшиеся коды КТРУ {code, name, score}, candidates_total — их число;
     errors           — {type, severity, message, ...}: nonexistent_value, out_of_range, unit_mismatch,
-                       conflict, product_not_found (severity=error); suspicious_value (severity=warning);
+                       conflict, contradiction, product_not_found, invalid_input (severity=error);
+                       suspicious_value, multiple_values, portal_unknown_value, invalid_answer (warning);
+                       not_in_ktru (info) — признаки вне КТРУ, сохранённые как Портал / новые;
     next_step        — что спросить у пользователя (type: product | characteristic | code) или null;
     ktru, ktru_name  — итоговый код, когда он определён однозначно;
     steps            — как сужался список кодов (для отображения);
+    missing_required — обязательные характеристики КТРУ оставшихся позиций, которых нет в описании;
     timings_ms       — время этапов.
 """
 import re
@@ -35,11 +38,11 @@ import time
 
 from ml.correct import Corrector
 from ml.ktru import DEFAULT_PATH, KtruStore
-from ml.narrow import answer_to_characteristic, narrow
+from ml.narrow import answer_to_characteristic, missing_required, narrow
 from ml.search import EMB_MODEL, Searcher
-from ml.text import main_noun, normalize, tokenize
+from ml.text import main_noun, normalize, pos, to_nominative, tokenize
 from ml.portal import PortalMatcher, new_characteristic
-from ml.units import NumberMatcher
+from ml.units import DIMENSION_NAMES, NumberMatcher
 from ml.values import GENERIC, ValueMatcher, _lemmas, _stem_eq
 
 SEARCH_K = 50
@@ -49,6 +52,17 @@ NOT_FOUND_SOFT = 0.86      # ниже — нет, если ни одно сло�
 MAX_CANDIDATES_OUT = 20
 VALUE_ERRORS = ("nonexistent_value", "out_of_range", "unit_mismatch")
 PUBLIC_CHAR_FIELDS = ("name", "value", "unit", "user_value", "source", "span", "method")
+ANSWER_TYPES = ("product", "characteristic", "code")
+# words that never form a feature on their own
+SKIP_POS = {"PREP", "CONJ", "PRCL", "INTJ", "NPRO", "NUMR", "ADVB", "PRED", "COMP"}
+# attribute names: alone, without a value, they are not a feature of the product («Арт.», «Размер», «Производитель»)
+ATTRIBUTE_WORDS = {"арт", "артикул", "модель", "производитель", "страна", "бренд", "марка", "количество", "размер",
+                   "тип", "вид", "комплект", "комплектация", "набор", "серия", "код", "цвет", "материал", "состав",
+                   "назначение", "исполнение", "гарантия", "упаковка", "описание", "параметр", "характеристика"}
+
+
+def _between_digits(text: str, i: int) -> bool:
+    return 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit()
 
 
 class Pipeline:
@@ -63,8 +77,7 @@ class Pipeline:
     def analyze(self, request: dict | str) -> dict:
         if isinstance(request, str):
             request = {"raw": request}
-        raw = request["raw"]
-        answers = request.get("answers") or []
+        raw, answers, input_errors = self._validate(request)
         timings, t0 = {}, time.perf_counter()
 
         def tick(name):
@@ -75,7 +88,7 @@ class Pipeline:
 
         # 1. нормализация и исправления
         text = normalize(raw)
-        tokens = request.get("tokens") if text == raw else None
+        tokens = request.get("tokens") if text == raw and isinstance(request.get("tokens"), list) else None
         text, corrections = self.corrector.fix_layout(text)
         if corrections or tokens is None:
             tokens = tokenize(text)
@@ -94,11 +107,29 @@ class Pipeline:
         tick("search")
 
         # 3. характеристики: текстовые значения и числа
-        num_chars, num_errors, reserved = self.numbers.match(text, codes)
+        num_chars, num_errors, reserved, unmatched_numbers = self.numbers.match(text, codes)
         text_chars, value_errors, normalizations = self.values.match(text, codes, reserved)
         corrections += normalizations
-        answered = [answer_to_characteristic(a, codes, self.store)
-                    for a in answers if a.get("type", "characteristic") == "characteristic"]
+        # a value that formally fits an open KTRU range but looks wrong must not pick the final code
+        suspicious = {tuple(e["span"]) for e in num_errors if e["type"] == "suspicious_value"}
+        for f in num_chars:
+            f["suspicious"] = tuple(f["span"]) in suspicious
+        answered = []
+        for a in answers:
+            if a["type"] != "characteristic":
+                continue
+            f = answer_to_characteristic(a, codes, self.store)
+            if f["codes"]:
+                answered.append(f)
+            else:
+                input_errors.append({"type": "invalid_answer", "severity": "warning", "characteristic": a["characteristic"],
+                                     "message": f"Ответ «{a['characteristic']} = {a['value']}» не подходит ни к одной "
+                                                f"из найденных позиций КТРУ и не учтён."})
+        names = {c["name"] for c in candidates}
+        for a in answers:
+            if a["type"] == "product" and a["value"] not in names:
+                input_errors.append({"type": "invalid_answer", "severity": "warning",
+                                     "message": f"Товар «{a['value']}» не входит в найденные варианты и не учтён."})
         answered_names = {a["name"] for a in answered}
         characteristics = answered + sorted(
             (f for f in text_chars + num_chars if f["name"] not in answered_names),
@@ -110,19 +141,33 @@ class Pipeline:
         tick("narrow")
 
         # 5. то, что не легло на КТРУ, не выбрасываем: справочник Портала, иначе — новая характеристика
-        if not not_found:
-            category = self.store.by_code[(remaining or candidates)[0]["code"]]["category"] if candidates else None
+        extra_notices = []
+        if not not_found and candidates:
+            pool = remaining or candidates
+            category = self.store.by_code[pool[0]["code"]]["category"]
+            # found among search candidates, but none of the remaining positions has it: not KTRU for this product
+            pool_chars = {ch["name"] for c in pool for ch in self.store.by_code[c["code"]]["characteristics"]}
+            for f in characteristics:
+                if f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars:
+                    f["origin"] = "portal" if self.portal.has(category, f["name"]) else "new"
+                    if f.get("user_value"):  # a number: show it as the user wrote it, KTRU ranges do not apply
+                        f["value"], f["unit"] = f["source"], None
             taken = [f["span"] for f in characteristics if f.get("span")] + \
-                    [e["span"] for e in value_errors + num_errors if e.get("span")] + reserved
-            characteristics += self._extra_characteristics(text, category, taken)
+                    [e["span"] for e in value_errors + num_errors if e.get("span")] + reserved + \
+                    self.values.last_consumed
+            product_words = {l for c in pool for l in _lemmas(c["name"])}
+            extra, extra_notices = self._extra_characteristics(text, category, taken, unmatched_numbers,
+                                                                product_words, pool, characteristics)
+            characteristics += extra
         tick("extra")
 
-        errors = value_errors + num_errors + conflicts
+        errors = input_errors + value_errors + num_errors + conflicts + extra_notices
         if not_found:
             errors = [{"type": "product_not_found",
                        "message": "Не удалось уверенно определить товар в КТРУ (категории: одежда, мебель, "
                                   "инструменты). Уточните наименование товара; ниже — ближайшие по смыслу позиции."}]
             next_step = None
+            errors = input_errors + errors
         # значения проверяем по допустимым у найденных позиций; если сам товар определён неточно
         # (наименование не совпало с текстом и не выбрано пользователем), это не ошибка пользователя
         # «несуществующее значение» достаточно проверить по товарам с тем же главным словом («стул»);
@@ -149,26 +194,124 @@ class Pipeline:
             "ktru": ktru["code"] if ktru else None,
             "ktru_name": ktru["name"] if ktru else None,
             "steps": steps,
+            "missing_required": [] if not_found or ktru else missing_required(remaining, characteristics, self.store),
             "timings_ms": timings,
         }
 
-    def _extra_characteristics(self, text: str, category: str | None, taken: list[list[int]]) -> list[dict]:
-        """Фрагменты описания (кроме первого — это название товара), не занятые КТРУ:
-        «цвет синий» → Портал, «противоскользящая рукоятка» → новая характеристика."""
-        extra = []
-        segments = list(re.finditer(r"(?:[^,;\n.]|\.(?=\d))+", text))
-        for m in segments[1:]:
-            seg = m.group().strip()
-            start = m.start() + len(m.group()) - len(m.group().lstrip())
-            span = [start, start + len(seg)]
-            if len(seg) < 3 or not any(c.isalpha() for c in seg) \
-                    or any(a < span[1] and span[0] < b for a, b in taken):
+    def _extra_characteristics(self, text: str, category: str | None, taken: list[list[int]],
+                               unmatched_numbers: list[dict], product_words: set,
+                               pool: list[dict], characteristics_ref: list[dict] = ()) -> tuple[list[dict], list[dict]]:
+        """Признаки из описания, которых нет среди характеристик КТРУ найденных товаров:
+        справочник Портала («цвет синий» → «Цвет»), иначе новая характеристика
+        («с противоскользящей рукояткой» → «Противоскользящая рукоятка: Да»). Не выбрасываем ничего."""
+        extra, notices, taken = [], [], list(taken)
+
+        def add(item: dict, source: str, span: list[int]) -> None:
+            origin = "portal" if item.pop("portal", False) else "new"
+            unknown, known = item.pop("unknown_value", False), item.pop("known_values", [])
+            extra.append({**item, "source": source, "span": span, "method": origin, "score": 70 if origin == "portal" else 50,
+                          "codes": [], "origin": origin})
+            if unknown:
+                notices.append({"type": "portal_unknown_value", "severity": "warning", "characteristic": item["name"],
+                                "source": source, "span": span,
+                                "message": f"Значение «{item['value']}» не встречается у характеристики «{item['name']}» "
+                                           f"на Портале поставщиков (встречаются: {', '.join(known)}). Проверьте значение."})
+
+        # numbers without a place among KTRU characteristics: «стол письменный высотой 75 см»
+        for n in unmatched_numbers:
+            phrase = f"{n['keyword']} {n['source']}" if n["keyword"] else n["source"]
+            found = self.portal.match(phrase, category)
+            if found:
+                item = {**found, "portal": True}
+            else:
+                name = to_nominative([n["keyword"]]).capitalize() if n["keyword"] else \
+                    DIMENSION_NAMES.get(n["dimension"], "Числовая характеристика")
+                item = {"name": name, "value": n["value_text"], "unit": None}
+            start = n["keyword_span"][0] if n["keyword_span"] else n["span"][0]
+            add(item, text[start:n["span"][1]], [start, n["span"][1]])
+            taken += [n["span"]] + ([n["keyword_span"]] if n["keyword_span"] else [])
+
+        # free words not used by KTRU, numbers, errors or the product name: «с противоскользящей рукояткой»
+        def is_taken(span):
+            return any(a < span[1] and span[0] < b for a, b in taken)
+
+        head_end = next((i for i, ch in enumerate(text) if ch in ",;\n" and not _between_digits(text, i)), len(text))
+        groups, current = [], []
+        for t in tokenize(text):
+            word = t["text"]
+            boundary = word in ",;.\n" and not (word in ".," and _between_digits(text, t["span"][0]))
+            if current and word[0].isdigit() and not is_taken(t["span"]):
+                current.append(t)  # «гарантия 3 года»: the number belongs to the phrase
                 continue
-            found = self.portal.match(seg, category)
-            origin, item = ("portal", found) if found else ("new", new_characteristic(seg))
-            extra.append({**item, "source": seg, "span": span, "method": origin,
-                          "score": 70 if found else 50, "codes": [], "origin": origin})
-        return extra
+            if boundary or is_taken(t["span"]) or not word[0].isalpha():
+                if current:
+                    groups.append(current)
+                current = []
+                continue
+            # product-name words are skipped only in the first fragment, where the product itself is named
+            in_head = t["span"][0] < head_end
+            if word.isascii() or len(word) < 3 or (in_head and t["lemma"] in product_words) or pos(word) in SKIP_POS:
+                if current and pos(word) not in ("PREP", "CONJ"):  # a preposition may sit inside a phrase
+                    groups.append(current)
+                    current = []
+                continue
+            current.append(t)
+        if current:
+            groups.append(current)
+
+        split = []
+        for g in groups:
+            no_noun = all(pos(t["text"]) != "NOUN" for t in g) and not any(t["text"][0].isdigit() for t in g)
+            split += [[t] for t in g] if no_noun and len(g) > 1 else [g]
+        for g in split:
+            if len(g) == 1 and g[0]["lemma"] in ATTRIBUTE_WORDS:
+                continue  # an attribute name without a readable value
+            span = [g[0]["span"][0], g[-1]["span"][1]]
+            phrase = text[span[0]:span[1]]
+            found = self.portal.match(phrase, category)
+            if found:
+                item = {**found, "portal": True}
+            elif any(t["text"][0].isdigit() for t in g):  # «гарантия 3 года» → name + value
+                item = new_characteristic(phrase)
+            else:
+                item = {"name": to_nominative([t["text"] for t in g]).capitalize(), "value": "Да", "unit": None}
+            add(item, phrase, span)
+
+        moved = [f for f in characteristics_ref if f.get("origin") in ("portal", "new") and f not in extra]
+        if extra or moved:
+            product = pool[0]["name"] if len({c["name"] for c in pool}) == 1 else "найденных товаров"
+            listed = ", ".join(f"«{f['name']}»" for f in moved + extra)
+            notices.append({"type": "not_in_ktru", "severity": "info",
+                            "characteristics": [f["name"] for f in moved + extra],
+                            "message": f"В КТРУ для «{product}» нет характеристик: {listed}. Они сохранены "
+                                       f"(источник — справочник Портала поставщиков или новая характеристика) "
+                                       f"и на выбор кода КТРУ не влияют."})
+        return extra, notices
+
+    @staticmethod
+    def _validate(request: dict) -> tuple[str, list[dict], list[dict]]:
+        """Bad input becomes a readable error instead of an exception."""
+        errors = []
+        raw = request.get("raw") if isinstance(request, dict) else None
+        if not isinstance(raw, str):
+            errors.append({"type": "invalid_input", "severity": "error", "message": "Поле «raw» должно быть строкой."})
+            raw = ""
+        answers_in = request.get("answers") if isinstance(request, dict) else None
+        if answers_in is not None and not isinstance(answers_in, list):
+            errors.append({"type": "invalid_answer", "severity": "warning", "message": "Поле «answers» должно быть списком."})
+            answers_in = []
+        answers = []
+        for a in answers_in or []:
+            ok = isinstance(a, dict) and isinstance(a.get("value"), str) and a.get("type", "characteristic") in ANSWER_TYPES
+            if ok and a.get("type", "characteristic") == "characteristic" and not isinstance(a.get("characteristic"), str):
+                ok = False
+            if not ok:
+                errors.append({"type": "invalid_answer", "severity": "warning",
+                               "message": f"Ответ {a!r} не распознан и не учтён: нужны поля type, value "
+                                          f"(и characteristic для type=characteristic)."})
+                continue
+            answers.append({**a, "type": a.get("type", "characteristic")})
+        return raw, answers, errors
 
     def _not_found(self, head: str, candidates: list[dict]) -> bool:
         if not candidates or self.searcher.reranker:
