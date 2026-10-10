@@ -1,9 +1,9 @@
-"""Второй и третий уровень иерархии источников характеристик: Портал поставщиков и новые.
+"""The second and third levels of the characteristic source hierarchy: the supplier portal and new ones.
 
-  1. КТРУ   — ml/values.py, ml/units.py (origin = "ktru")
-  2. Портал — характеристика есть в справочнике характеристик Портала (вкладка 2 выгрузок):
+  1. KTRU   — ml/values.py, ml/units.py (origin = "ktru")
+  2. Portal — the characteristic exists in the portal characteristic reference (sheet 2 of the exports):
               «цвет синий» → «Цвет: синий», «синий» → «Цвет: синий» (origin = "portal")
-  3. Новая  — фрагмент описания не лёг ни на КТРУ, ни на Портал, но выбрасывать его нельзя:
+  3. New    — a description fragment fits neither KTRU nor the portal, but must not be dropped:
               «противоскользящая рукоятка» → «Противоскользящая рукоятка: Да» (origin = "new")
 
     .venv/bin/python -m ml.portal build   # data/raw/supplier_portal/*.xlsx → data/processed/portal_characteristics.json
@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = ROOT / "data" / "raw" / "supplier_portal"
 DICT_PATH = ROOT / "data" / "processed" / "portal_characteristics.json"
 CATEGORIES = {"Инструменты": "инструменты", "Мебель": "мебель", "Одежда": "одежда"}
-MIN_USAGE = 2          # характеристика должна встречаться хотя бы в 2 категориях Портала (КПГЗ)
-MAX_VALUES = 300       # значений на характеристику храним не больше
+MIN_USAGE = 2          # a characteristic must occur in at least 2 portal categories (KPGZ)
+MAX_VALUES = 300       # at most this many values are kept per characteristic
 MIN_VALUES_TO_CHECK = 5  # check a value against the portal list only when the list is substantial
 SKIP_NAMES = {"артикул", "модель", "производитель", "страна происхождения", "бренд", "торговая марка",
               "гарантийный срок", "срок гарантии", "описание", "комплектация"}
@@ -32,7 +32,7 @@ def _lemmas(text: str) -> list[str]:
 
 
 def build() -> None:
-    """Собирает словарь характеристик Портала по категориям из вкладки 2 выгрузок."""
+    """Builds the portal characteristic dictionary by category from sheet 2 of the exports."""
     import pandas as pd
 
     out: dict[str, dict] = {}
@@ -69,7 +69,7 @@ def build() -> None:
         out[category] = {
             name: {"usage": int(usage[name]),
                    "kind": kinds[name].most_common(1)[0][0],
-                   # единица — только у числовых: у текстовых в выгрузке бывает мусор («Материал корпуса» — «чугун»)
+                   # a unit only for numeric ones: text ones carry junk in the export («Материал корпуса» — «чугун»)
                    "unit": units[name].most_common(1)[0][0]
                            if units[name] and "числов" in kinds[name].most_common(1)[0][0].lower() else None,
                    "values": [v for v, _ in values[name].most_common(MAX_VALUES)]}
@@ -90,11 +90,11 @@ class PortalMatcher:
         self.value_index: dict[str, dict[str, set]] = {}
         self.products: dict[str, dict[str, dict[str, int]]] = {}
         if not path.exists():
-            return  # словаря нет — уровень «Портал» пропускается, остаётся «новая»
+            return  # no dictionary — the «portal» level is skipped, «new» remains
         data = json.loads(path.read_text(encoding="utf-8"))
         for category, chars in data.items():
             self.products[category] = chars.pop("_products", {})
-            # длинные названия проверяем первыми: «Цвет сиденья» раньше, чем «Цвет»
+            # long names are checked first: «Цвет сиденья» before «Цвет»
             names = sorted(((_lemmas(alias), n, info) for n, info in chars.items()
                             for alias in [n, *info.get("aliases", [])]), key=lambda x: -len(x[0]))
             self.by_category[category] = [x for x in names if x[0]]
@@ -117,12 +117,12 @@ class PortalMatcher:
         return bool(self.by_category)
 
     def match(self, segment: str, category: str | None) -> dict | None:
-        """Фрагмент описания → характеристика Портала {name, value, unit} или None."""
+        """Description fragment → a portal characteristic {name, value, unit} or None."""
         if not category or category not in self.by_category:
             return None
         toks = [t for t in tokenize(segment) if t["text"][0].isalnum()]
         lemmas = [t["lemma"] for t in toks]
-        # 1. фрагмент начинается с названия характеристики: «цвет сиденья синий», «вес 0.6 кг»
+        # 1. the fragment starts with a characteristic name: «цвет сиденья синий», «вес 0.6 кг»
         for name_lemmas, name, info in self.by_category[category]:
             n = len(name_lemmas)
             if lemmas[:n] == name_lemmas and len(lemmas) > n:
@@ -142,7 +142,7 @@ class PortalMatcher:
                         out["unknown_value"] = True
                         out["known_values"] = info["values"][:8]
                 return out
-        # 2. фрагмент — известное значение характеристики: «синий» → «Цвет» (короткое и употребимое название)
+        # 2. the fragment is a known value of a characteristic: «синий» → «Цвет» (a short and common name)
         names = self.value_index[category].get(" ".join(lemmas), {})
         if names and not any(ch.isdigit() for ch in segment):
             name = min(names, key=lambda n: (len(n.split()), -self.usage[category].get(n, 0)))
@@ -162,9 +162,9 @@ def _has_unit(value: str) -> bool:
 
 
 def new_characteristic(segment: str) -> dict:
-    """Фрагмент без места в КТРУ и на Портале — сохраняем как новую характеристику, не выбрасываем."""
+    """A fragment with no place in KTRU or on the portal — kept as a new characteristic, never dropped."""
     text = segment.strip()
-    m = re.match(r"^(.*?)[\s:]+(\d[\d.,]*\s*\S*)$", text)  # «длина кабеля 3 м» → имя + числовое значение
+    m = re.match(r"^(.*?)[\s:]+(\d[\d.,]*\s*\S*)$", text)  # «длина кабеля 3 м» → name + numeric value
     if m and m.group(1):
         return {"name": m.group(1)[:1].upper() + m.group(1)[1:], "value": m.group(2), "unit": None}
     return {"name": text[:1].upper() + text[1:], "value": "Да", "unit": None}

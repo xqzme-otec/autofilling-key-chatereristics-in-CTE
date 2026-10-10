@@ -1,7 +1,7 @@
-"""Ручная проверка: вводишь описание товара — видишь, что ответила система.
+"""Manual check: type a product description — see what the system answers.
 
-    .venv/bin/python -m eval.try              # на настоящем КТРУ (data/processed/ktru.parquet)
-    .venv/bin/python -m eval.try --json       # плюс полный JSON-ответ (как его получит фронт)
+    .venv/bin/python -m eval.try              # on the real KTRU (data/processed/ktru.parquet)
+    .venv/bin/python -m eval.try --json       # plus the full JSON response (as the frontend gets it)
 """
 import argparse
 import json

@@ -1,14 +1,14 @@
-"""Оценка качества ML-части.
+"""Quality evaluation of the ML part.
 
-    python -m eval.run                         # чистые и зашумлённые тексты
+    python -m eval.run                         # clean and noisy texts
     python -m eval.run --model deepvk/USER-bge-m3 --rerank --cases eval/cases.jsonl --ktru data/ktru.json
 
-Метрики:
-  name@1 / name@5 — правильное наименование товара первым / в первой пятёрке поиска;
-  code_kept       — правильный код остался среди кандидатов после сужения (не потерян);
-  false_not_found — доля запросов, где товар ошибочно объявлен «не найденным»;
-  chars P/R/F1    — точность (значение допустимо для правильного кода) и полнота (по эталону);
-  latency         — среднее и 95-й перцентиль времени на запрос.
+Metrics:
+  name@1 / name@5 — the correct product name is first / in the top 5 of the search;
+  code_kept       — the correct code stayed among the candidates after narrowing (not lost);
+  false_not_found — share of queries where the product was wrongly declared «not found»;
+  chars P/R/F1    — precision (the value is allowed for the correct code) and recall (by the reference);
+  latency         — mean and 95th percentile time per query.
 """
 import argparse
 import json
@@ -32,19 +32,19 @@ def evaluate(pipe: Pipeline, cases: list[dict], verbose: bool = False) -> dict:
         res = pipe.analyze(c["text"])
         latencies.append((time.perf_counter() - t) * 1000)
 
-        # в КТРУ у одного названия много кодов — поиск оцениваем по названию, код выбирает сужение
+        # in KTRU one name has many codes — search is evaluated by name, the code is chosen by narrowing
         names = list(dict.fromkeys(x["name"] for x in pipe.searcher.search(res["text"], k=50)))
         hit1 += names[:1] == [want_name]
         hit5 += want_name in names[:5]
         final += c["ktru"] in [x["code"] for x in res["candidates"]] + [res["ktru"]]
         not_found += any(e["type"] == "product_not_found" for e in res["errors"])
 
-        # оцениваем характеристики КТРУ; портал и новые — вне КТРУ, их нет у кода по определению
+        # KTRU characteristics are evaluated; portal and new ones are outside KTRU, the code never has them
         pred = {(x["name"], x["value"]) for x in res["characteristics"]
                 if x["method"] != "name" and x.get("origin", "ktru") == "ktru"}
         gold = set(c["chars"].items())
-        # точность: значение допустимо для правильного кода (в эталоне не все верные характеристики —
-        # например, «Тип каркаса = Деревянный» из названия «Стул на деревянном каркасе»)
+        # precision: the value is allowed for the correct code (the reference lacks some correct characteristics —
+        # e.g. «Тип каркаса = Деревянный» from the name «Стул на деревянном каркасе»)
         allowed = {ch["name"]: {lemmatize_phrase(format_value(v, ch["unit"])) for v in ch["values"]}
                    for ch in pipe.store.by_code[c["ktru"]]["characteristics"]}
         valid = {(n, v) for n, v in pred if lemmatize_phrase(v) in allowed.get(n, ())
@@ -85,7 +85,7 @@ def main():
     if args.ktru or "mock" in args.cases:
         kwargs["ktru_path"] = args.ktru or MOCK_PATH
     pipe = Pipeline(**kwargs)
-    pipe.analyze("прогрев")  # первый запрос медленный из-за загрузки модели
+    pipe.analyze("прогрев")  # the first query is slow because the model loads
 
     print(f"модель: {args.model}  реранкер: {args.rerank}  примеров: {len(cases)}\n")
     print("чистые тексты:   ", evaluate(pipe, cases, args.verbose))
