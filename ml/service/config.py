@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -25,6 +25,9 @@ class Settings:
     max_answers: int = 100
     # requests with a larger Content-Length are rejected before the body is read
     max_body_bytes: int = 256 * 1024
+    # None -> new characteristics are neither saved nor looked up (ml/service/repository.py);
+    # holds the password: kept out of repr and never logged
+    postgres_dsn: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -41,6 +44,7 @@ class Settings:
             max_text_length=_positive_int(env, "MAX_TEXT_LENGTH", cls.max_text_length),
             max_answers=_positive_int(env, "MAX_ANSWERS", cls.max_answers),
             max_body_bytes=_positive_int(env, "MAX_BODY_BYTES", cls.max_body_bytes),
+            postgres_dsn=env.get("POSTGRES_DSN", "").strip() or None,
         )
 
 

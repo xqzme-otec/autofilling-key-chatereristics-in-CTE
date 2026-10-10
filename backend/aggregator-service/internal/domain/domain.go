@@ -16,6 +16,7 @@ type AnalysisResult struct {
 	CompatibleCount *int             `json:"compatible_count,omitempty"`
 	RemainingCount  *int             `json:"remaining_count,omitempty"`
 	ProductIntent   *string          `json:"product_intent,omitempty"`
+	Category        *string          `json:"category,omitempty"` // одежда, мебель or инструменты; absent when not found
 	SubtypeContext  []ContextSignal  `json:"subtype_context,omitempty"`
 	Errors          []AnalysisError  `json:"errors"`
 	MissingRequired []string         `json:"missing_required"` // required KTRU characteristics the text lacks
@@ -42,6 +43,9 @@ type Characteristic struct {
 	UserText         *string  `json:"user_text,omitempty"`
 	UsedForNarrowing *bool    `json:"used_for_narrowing,omitempty"`
 	UsedForReranking *bool    `json:"used_for_reranking,omitempty"`
+	// Known is set only for origin "new": true when another description of the same product had it.
+	// Absent when the model service did not check (its Postgres is off or down).
+	Known *bool `json:"known,omitempty"`
 }
 
 type ContextSignal struct {

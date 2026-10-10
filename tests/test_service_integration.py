@@ -106,7 +106,7 @@ def check_aggregator_contract(r: dict) -> None:
 
 def test_ready(client):
     assert client.get("/ready").json()["status"] == "ready"
-    assert client.get("/health").json() == {"status": "ok", "pipeline": "ready"}
+    assert client.get("/health").json() == {"status": "ok", "pipeline": "ready", "postgres": "off"}
 
 
 @pytest.mark.parametrize("raw", TEXTS)
