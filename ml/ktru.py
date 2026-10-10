@@ -60,6 +60,8 @@ def load_parquet(path: Path, active_only: bool = True, skip_templates: bool = Tr
         df = df[df["status"] == "ACTIVE"]
     if skip_templates:
         df = df[~df["is_template"].astype(bool)]
+    # services («Услуги по производству…») are not goods (СТЕ) — out of scope
+    df = df[~df["name"].fillna("").str.strip().str.lower().str.startswith("услуг")]
     items = []
     for r in df.itertuples(index=False):
         chars = [ch for ch in map(_convert_char, json.loads(r.characteristics_json or "[]")) if ch]
@@ -68,7 +70,8 @@ def load_parquet(path: Path, active_only: bool = True, skip_templates: bool = Tr
         items.append({
             "code": r.code,
             "name": (r.name or "").strip(),
-            "description": (r.nsi_description or "").strip() if getattr(r, "nsi_description", None) else "",
+            # описание есть у единиц позиций, у остальных в parquet NaN (float) — берём только строки
+            "description": r.nsi_description.strip() if isinstance(getattr(r, "nsi_description", None), str) else "",
             "okpd2": r.okpd2_code,
             "category": CATEGORY_RU.get(r.category, r.category),
             "unit": okeis[0]["name"] if okeis else None,

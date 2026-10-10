@@ -74,3 +74,22 @@ def main_noun(text: str) -> str | None:
 def pos(word: str) -> str | None:
     """Часть речи (NOUN, ADJF, VERB, …) самого вероятного разбора."""
     return _morph.parse(word.lower())[0].tag.POS
+
+
+def to_nominative(words: list[str]) -> str:
+    """«противоскользящей рукояткой» → «противоскользящая рукоятка»: nouns to nominative, adjectives agree."""
+    parses = [_morph.parse(w.lower())[0] for w in words]
+    head = next((p for p in reversed(parses) if p.tag.POS == "NOUN"), None)
+    gender = head.tag.gender if head else None
+    number = head.tag.number if head else "sing"
+    out = []
+    for w, p in zip(words, parses):
+        if p.tag.POS == "NOUN" and p is head:
+            form = p.inflect({"nomn", number}) if number else p.inflect({"nomn"})
+        elif p.tag.POS in ("ADJF", "PRTF"):
+            grammemes = {"nomn", "plur"} if number == "plur" else {"nomn", gender} if gender else {"nomn"}
+            form = p.inflect(grammemes)
+        else:
+            form = None
+        out.append(form.word if form else w.lower())
+    return " ".join(out)
