@@ -1,6 +1,6 @@
 """Known new characteristics: ml/service/analysis.py (service layer) and ml/service/repository.py (Postgres).
 
-Without Postgres: the key, the fit check (in-memory repository), the degraded mode (unreachable
+Without Postgres: the key, the fit check (in-memory repository, ml/fit.py), the degraded mode (unreachable
 Postgres) and health. With Postgres: set TEST_POSTGRES_DSN, e.g.
     docker run -d --name ktru-test-pg -p 5432:5432 -e POSTGRES_PASSWORD=test postgres:18
     TEST_POSTGRES_DSN=postgresql://postgres:test@localhost:5432/postgres pytest tests/test_new_characteristics.py
@@ -39,8 +39,10 @@ def result_with(category: str, *new_names: str) -> dict:
 
 
 class FixedPipeline:
-    def __init__(self, result: dict):
+    def __init__(self, result: dict, store=None):
         self.result = result
+        if store is not None:  # the fit check reads the KTRU store of the loaded pipeline
+            self.store = store
 
     def analyze(self, request: dict) -> dict:
         # a fresh copy per call (the service marks characteristics in place); the text identifies the description
@@ -71,8 +73,14 @@ class MemoryRepository:
         self.rows |= {(category, product, key, text_hash) for key, *_ in items}
 
 
-def client(result: dict, repository) -> TestClient:
-    return TestClient(create_app(Settings(), pipeline_factory=lambda: FixedPipeline(result),
+class Store:
+    """KtruStore shape for the fit check: one hammer position without electrical characteristics."""
+    items = [{"code": "25.73.30.141-00000001", "name": "Молоток", "category": "инструменты",
+              "characteristics": [{"name": "Масса молотка", "unit": "Килограмм", "values": []}]}]
+
+
+def client(result: dict, repository, store=None) -> TestClient:
+    return TestClient(create_app(Settings(), pipeline_factory=lambda: FixedPipeline(result, store),
                                  load_in_background=False, repository=repository))
 
 
@@ -87,7 +95,7 @@ def test_key_ignores_word_forms_order_and_case():
     assert characteristic_key("рукоятки противоскользящей") == "противоскользящий рукоятка"
 
 
-def test_placeholder_fit_check_accepts_every_characteristic():
+def test_without_a_ktru_store_every_characteristic_fits():
     repository = MemoryRepository()
     with client(result_with("инструменты", "Противоскользящая рукоятка", "Магнитный держатель"), repository) as c:
         assert [ch["known"] for ch in new_characteristics(c, "первое описание")] == [False, False]
@@ -95,16 +103,57 @@ def test_placeholder_fit_check_accepts_every_characteristic():
     assert len(repository.rows) == 4  # 2 characteristics x 2 descriptions
 
 
-def test_characteristic_that_does_not_fit_is_kept_but_not_saved(monkeypatch):
-    monkeypatch.setattr("ml.service.analysis.fits_product",
-                        lambda category, product, name, value: name != "Магнитный держатель")
+def test_characteristic_that_does_not_fit_is_kept_warned_and_not_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr("ml.fit.DICT_PATH", tmp_path / "absent.json")
     repository = MemoryRepository()
-    with client(result_with("инструменты", "Противоскользящая рукоятка", "Магнитный держатель"), repository) as c:
-        first = new_characteristics(c, "первое описание")
+    result = result_with("инструменты", "Противоскользящая рукоятка", "Стильный")
+    with client(result, repository, Store()) as c:
+        r = c.post("/analyze", json={"raw": "первое описание", "answers": []}).json()
         second = new_characteristics(c, "второе описание")
-    assert [ch["name"] for ch in first] == ["Противоскользящая рукоятка", "Магнитный держатель"]  # nothing dropped
+    assert [ch["name"] for ch in r["characteristics"] if ch["origin"] == "new"] == \
+        ["Противоскользящая рукоятка", "Стильный"]  # nothing dropped
+    warnings = [e for e in r["errors"] if e["type"] == "not_fitting_characteristic"]
+    assert [(e["characteristic"], e["severity"]) for e in warnings] == [("Стильный", "warning")]
     assert [ch["known"] for ch in second] == [True, False]
     assert {key for _, _, key, _ in repository.rows} == {"противоскользящий рукоятка"}
+
+
+def test_fit_check_works_without_postgres(tmp_path, monkeypatch):
+    monkeypatch.setattr("ml.fit.DICT_PATH", tmp_path / "absent.json")  # KTRU only: no power for tools
+    with client(result_with("инструменты", "Мощность 800 Вт"), None, Store()) as c:
+        r = c.post("/analyze", json={"raw": "молоток, мощность 800 Вт", "answers": []}).json()
+    assert [e["characteristic"] for e in r["errors"] if e["type"] == "not_fitting_characteristic"] == \
+        ["Мощность 800 Вт"]
+
+
+class Classifier:
+    """NewCharClassifier.predict contract: a fixed zone and P(valid) per characteristic name."""
+
+    def __init__(self, zones: dict[str, tuple[str, float]]):
+        self.zones = zones
+        self.seen: list[str] = []
+
+    def predict(self, items):
+        self.seen += [it["name"] for it in items]
+        return [self.zones[it["name"]] for it in items]
+
+
+def test_classifier_judges_what_the_rules_let_through(tmp_path, monkeypatch):
+    monkeypatch.setattr("ml.fit.DICT_PATH", tmp_path / "absent.json")
+    classifier = Classifier({"Противоскользящая рукоятка": ("valid", 0.97), "Размер обуви 42": ("invalid", 0.02),
+                             "Влагостойкость": ("uncertain", 0.4)})
+    monkeypatch.setattr("ml.service.analysis.AnalysisService._new_char_classifier", lambda self: classifier)
+    repository = MemoryRepository()
+    result = result_with("инструменты", "Противоскользящая рукоятка", "Размер обуви 42", "Влагостойкость", "Стильный")
+    with client(result, repository, Store()) as c:
+        r = c.post("/analyze", json={"raw": "молоток", "answers": []}).json()
+    assert classifier.seen == ["Противоскользящая рукоятка", "Размер обуви 42", "Влагостойкость"]  # not the rules' one
+    by_type = {(e["type"], e["characteristic"], e["checked_by"]) for e in r["errors"] if "checked_by" in e}
+    assert by_type == {("not_fitting_characteristic", "Стильный", "rules"),
+                       ("not_fitting_characteristic", "Размер обуви 42", "model"),
+                       ("uncertain_characteristic", "Влагостойкость", "model")}
+    assert len([ch for ch in r["characteristics"] if ch["origin"] == "new"]) == 4  # nothing dropped
+    assert {key for _, _, key, _ in repository.rows} == {"противоскользящий рукоятка"}  # only the valid one
 
 
 def test_unreachable_postgres_degrades(caplog):

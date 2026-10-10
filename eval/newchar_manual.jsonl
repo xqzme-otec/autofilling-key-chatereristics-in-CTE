@@ -1,0 +1,91 @@
+{"product": "молоток", "name": "Антискользящая рукоятка", "value": "Да", "label": "valid"}
+{"product": "стол", "name": "Разрешение экрана", "value": "4K", "label": "invalid"}
+{"product": "куртка", "name": "Объем двигателя", "value": "2 л", "label": "invalid"}
+{"product": "стол", "name": "Повышенная влагостойкость", "value": "Да", "label": "ambiguous"}
+{"product": "молоток", "name": "Магнитный держатель гвоздей", "value": "Да", "label": "valid"}
+{"product": "отвертка", "name": "Магнитный наконечник", "value": "Да", "label": "valid"}
+{"product": "дрель", "name": "Длина сетевого кабеля", "value": "3 м", "label": "valid"}
+{"product": "дрель", "name": "Подсветка рабочей зоны", "value": "Да", "label": "valid"}
+{"product": "шуруповерт", "name": "Индикатор заряда аккумулятора", "value": "Да", "label": "valid"}
+{"product": "плоскогубцы", "name": "Изолированные рукоятки", "value": "Да", "label": "valid"}
+{"product": "ножовка", "name": "Защитный чехол для полотна", "value": "Да", "label": "valid"}
+{"product": "перфоратор", "name": "Кейс для хранения", "value": "Да", "label": "valid"}
+{"product": "лопата", "name": "Черенок с D-образной ручкой", "value": "Да", "label": "valid"}
+{"product": "рулетка", "name": "Фиксатор ленты", "value": "Да", "label": "valid"}
+{"product": "шпатель", "name": "Ширина полотна", "value": "100 мм", "label": "valid"}
+{"product": "уровень", "name": "Количество глазков", "value": "3", "label": "valid"}
+{"product": "молоток", "name": "Фиберглассовая рукоятка", "value": "Да", "label": "valid"}
+{"product": "стамеска", "name": "Заточка с двух сторон", "value": "Да", "label": "valid"}
+{"product": "молоток", "name": "Размер одежды", "value": "48", "label": "invalid"}
+{"product": "отвертка", "name": "Количество посадочных мест", "value": "4", "label": "invalid"}
+{"product": "дрель", "name": "Ростовка", "value": "170-176", "label": "invalid"}
+{"product": "плоскогубцы", "name": "Калорийность", "value": "200 ккал", "label": "invalid"}
+{"product": "рулетка", "name": "Обивка сиденья", "value": "экокожа", "label": "invalid"}
+{"product": "шпатель", "name": "Высота спинки", "value": "50 см", "label": "invalid"}
+{"product": "ножовка", "name": "Застежка", "value": "молния", "label": "invalid"}
+{"product": "лопата", "name": "Длина рукава", "value": "60 см", "label": "invalid"}
+{"product": "молоток", "name": "Модный", "value": "Да", "label": "invalid"}
+{"product": "дрель", "name": "Шикарная", "value": "Да", "label": "invalid"}
+{"product": "уровень", "name": "Утеплитель", "value": "синтепон", "label": "invalid"}
+{"product": "отвертка", "name": "Скорость интернета", "value": "100 Мбит/с", "label": "invalid"}
+{"product": "стол", "name": "Устойчивость к царапинам", "value": "Да", "label": "valid"}
+{"product": "стол", "name": "Регулировка высоты", "value": "Да", "label": "valid"}
+{"product": "стул", "name": "Мягкое сиденье", "value": "Да", "label": "valid"}
+{"product": "шкаф", "name": "Замок на дверцах", "value": "Да", "label": "valid"}
+{"product": "шкаф", "name": "Зеркало на двери", "value": "Да", "label": "valid"}
+{"product": "кресло", "name": "Подголовник", "value": "Да", "label": "valid"}
+{"product": "кресло", "name": "Механизм качания", "value": "Да", "label": "valid"}
+{"product": "диван", "name": "Механизм трансформации", "value": "еврокнижка", "label": "valid"}
+{"product": "кровать", "name": "Ящики для белья", "value": "Да", "label": "valid"}
+{"product": "стеллаж", "name": "Нагрузка на полку", "value": "50 кг", "label": "valid"}
+{"product": "тумба", "name": "Количество ящиков", "value": "3", "label": "valid"}
+{"product": "стол", "name": "Кабель-канал", "value": "Да", "label": "valid"}
+{"product": "стул", "name": "Заглушки на ножках", "value": "Да", "label": "valid"}
+{"product": "шкаф", "name": "Антресоль", "value": "Да", "label": "valid"}
+{"product": "стол", "name": "Объем двигателя", "value": "1.6 л", "label": "invalid"}
+{"product": "стул", "name": "Ёмкость аккумулятора", "value": "2000 мАч", "label": "invalid"}
+{"product": "шкаф", "name": "Максимальная скорость", "value": "120 км/ч", "label": "invalid"}
+{"product": "кровать", "name": "Калорийность", "value": "300 ккал", "label": "invalid"}
+{"product": "диван", "name": "Разрешение экрана", "value": "1920x1080", "label": "invalid"}
+{"product": "стеллаж", "name": "Размер обуви", "value": "42", "label": "invalid"}
+{"product": "стол", "name": "Длина рукава", "value": "62 см", "label": "invalid"}
+{"product": "кресло", "name": "Капюшон", "value": "Да", "label": "invalid"}
+{"product": "тумба", "name": "Частота вращения шпинделя", "value": "3000 об/мин", "label": "invalid"}
+{"product": "стул", "name": "Стильный", "value": "Да", "label": "invalid"}
+{"product": "шкаф", "name": "Элегантный", "value": "Да", "label": "invalid"}
+{"product": "кровать", "name": "Энергия удара", "value": "3 Дж", "label": "invalid"}
+{"product": "куртка", "name": "Светоотражающие полосы", "value": "Да", "label": "valid"}
+{"product": "куртка", "name": "Съемный капюшон", "value": "Да", "label": "valid"}
+{"product": "куртка", "name": "Температурный режим", "value": "до -30 °C", "label": "valid"}
+{"product": "брюки", "name": "Количество карманов", "value": "6", "label": "valid"}
+{"product": "брюки", "name": "Наколенники", "value": "Да", "label": "valid"}
+{"product": "халат", "name": "Вышивка на кармане", "value": "Да", "label": "valid"}
+{"product": "футболка", "name": "Принт", "value": "Да", "label": "valid"}
+{"product": "футболка", "name": "Состав ткани", "value": "100% хлопок", "label": "valid"}
+{"product": "перчатка", "name": "Сенсорные пальцы для смартфона", "value": "Да", "label": "valid"}
+{"product": "перчатка", "name": "Покрытие ладони", "value": "нитрил", "label": "valid"}
+{"product": "шапка", "name": "Помпон", "value": "Да", "label": "valid"}
+{"product": "костюм", "name": "Плотность ткани", "value": "240 г/м2", "label": "valid"}
+{"product": "жилет", "name": "Сигнальный цвет", "value": "Да", "label": "valid"}
+{"product": "рубашка", "name": "Длина рукава", "value": "длинный", "label": "valid"}
+{"product": "жакет", "name": "Объем", "value": "1 литр", "label": "invalid"}
+{"product": "футболка", "name": "Мощность", "value": "800 Вт", "label": "invalid"}
+{"product": "брюки", "name": "Напряжение", "value": "220 В", "label": "invalid"}
+{"product": "халат", "name": "Ёмкость аккумулятора", "value": "2000 мАч", "label": "invalid"}
+{"product": "перчатка", "name": "Крутящий момент", "value": "50 Нм", "label": "invalid"}
+{"product": "куртка", "name": "Количество ящиков", "value": "3", "label": "invalid"}
+{"product": "рубашка", "name": "Нагрузка на полку", "value": "30 кг", "label": "invalid"}
+{"product": "шапка", "name": "Диаметр сверла", "value": "8 мм", "label": "invalid"}
+{"product": "платье", "name": "Отличного качества", "value": "Да", "label": "invalid"}
+{"product": "футболка", "name": "Классная", "value": "Да", "label": "invalid"}
+{"product": "брюки", "name": "Механизм трансформации", "value": "книжка", "label": "invalid"}
+{"product": "костюм", "name": "Частота", "value": "50 Гц", "label": "invalid"}
+{"product": "куртка", "name": "Подогрев", "value": "Да", "label": "ambiguous"}
+{"product": "стол", "name": "Электропривод", "value": "Да", "label": "ambiguous"}
+{"product": "кресло", "name": "Функция массажа", "value": "Да", "label": "ambiguous"}
+{"product": "стул", "name": "Светится в темноте", "value": "Да", "label": "ambiguous"}
+{"product": "стеллаж", "name": "Хранение воды", "value": "Да", "label": "ambiguous"}
+{"product": "молоток", "name": "Экологичный", "value": "Да", "label": "ambiguous"}
+{"product": "куртка", "name": "Вместимость", "value": "2 человека", "label": "ambiguous"}
+{"product": "шкаф", "name": "Встроенная подсветка", "value": "Да", "label": "ambiguous"}
+{"product": "перчатка", "name": "Антибактериальная пропитка", "value": "Да", "label": "ambiguous"}
