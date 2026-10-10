@@ -205,20 +205,13 @@
 ## 10. Репозиторий
 
 ```
-/backend        Go: API, сессии, валидация, аудит
+/backend        Python: API, сессии, валидация, аудит
 /ml             Python: indexer/ + pipeline/
 /frontend       React + UI-кит Портала
 /deploy         docker-compose.yml, .env.example
-/docs           DOC.md · PLAN.md · PIPELINE.md · api.md
-                glossary.md · decisions.md · demo-script.md · bpmn/
+/docs           DOC.md
 /tests          бенчмарк и тестовые сценарии
 `
-
----
-
-
-
-
 ---
 
 ## 11. Что мы НЕ делаем
