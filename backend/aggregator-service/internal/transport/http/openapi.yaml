@@ -1,0 +1,922 @@
+openapi: 3.0.3
+info:
+  title: Агрегатор КТРУ — API для фронтенда
+  version: 1.0.0
+  description: |
+    Единственная точка входа для фронтенда: подбор кода КТРУ по свободному описанию товара.
+
+    **Сценарий одного товара**
+
+    1. `POST /api/v1/analyze` с текстом описания — создаётся сессия, в ответе результат анализа.
+    2. Пока в ответе `next_step != null`, показать вопрос и варианты и отправить выбранный вариант
+       в `POST /api/v1/sessions/{session_id}/answers`. Ответ того же формата.
+    3. `next_step == null` — диалог окончен:
+       - `ktru != null` — код определён;
+       - `ktru == null` — товар не найден в КТРУ, причина в `errors[]`.
+
+    **Сценарий таблицы**
+
+    `POST /api/v1/analyze/batch` с файлом `.csv`, `.xlsx` или `.xls` — для каждого товара создаётся
+    такая же сессия, как в `POST /api/v1/analyze`. Дальше каждый товар ведётся по шагам 2–3.
+
+    **Ошибки** всех эндпоинтов имеют один формат — схема `Error`. Поле `error.message` можно
+    показывать пользователю как есть.
+
+    **X-Request-ID.** Каждый ответ несёт заголовок `X-Request-ID`; он же приходит в теле ошибки
+    как `error.request_id`. По нему запрос находится в логах агрегатора и модели — выводите его в
+    `console.error` вместе с ошибкой.
+servers:
+  - url: /
+    description: тот же адрес, с которого открыта эта страница
+  - url: http://localhost:8000
+    description: агрегатор напрямую
+  - url: http://localhost:8080
+    description: через nginx фронтенда (проксирует только /api/)
+tags:
+  - name: Подбор кода КТРУ
+  - name: Служебное
+
+paths:
+  /api/v1/analyze:
+    post:
+      tags: [Подбор кода КТРУ]
+      summary: Начать подбор по описанию товара
+      description: |
+        Создаёт сессию по свободному описанию товара. Текст уходит в модель как есть: опечатки,
+        раскладку и регистр исправляет модель, результат исправлений — в `corrections[]`.
+      operationId: analyze
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeRequest"
+            example:
+              text: Стул офисный, на колесиках, кожзам, высота 110 см
+      responses:
+        "200":
+          $ref: "#/components/responses/AnalysisResult"
+        "422":
+          description: |
+            Запрос отклонён:
+            - `validation_error` — тело не JSON-объект или нет непустой строки `text`; подробности в `error.details`;
+            - `invalid_text` — текст состоит из пробелов и невидимых символов или длиннее лимита.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                validation_error:
+                  value:
+                    error:
+                      code: validation_error
+                      message: Некорректный запрос
+                      request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+                      details: ["text: required non-empty string"]
+                invalid_text:
+                  value:
+                    error:
+                      code: invalid_text
+                      message: Описание длиннее 2000 символов
+                      request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/ModelBadResponse"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+        "504":
+          $ref: "#/components/responses/ModelTimeout"
+
+  /api/v1/analyze/batch:
+    post:
+      tags: [Подбор кода КТРУ]
+      summary: Начать подбор для всех товаров из таблицы
+      description: |
+        Принимает таблицу с товарами и для каждого товара создаёт обычную сессию — так же, как
+        `POST /api/v1/analyze`. На вопросы каждой сессии отвечают через
+        `POST /api/v1/sessions/{session_id}/answers`.
+
+        **Файл**
+
+        - формат `.csv`, `.xlsx` или `.xls`, определяется по расширению имени файла; из книги
+          Excel читается первый лист;
+        - размер тела запроса — не больше 1 МБ (настройка `MAX_BODY_BYTES`);
+        - CSV: кодировка UTF-8 или Windows-1251; разделитель определяется по первой строке —
+          табуляция, иначе `;`, иначе `,`. При разделителе `,` описание с запятыми берётся в кавычки.
+
+        **Какие строки считаются товарами**
+
+        - товар — строка с непустым описанием; название необязательно. Строка с одним названием
+          и пустые строки пропускаются;
+        - если в первой непустой строке есть заголовок, начинающийся с «Описание»,
+          «Характеристики» или `Description`, колонки берутся по заголовкам; название — колонка с
+          заголовком на «Название», «Наименование», «Товар» или `Name`;
+        - без строки заголовков: первая занятая колонка — название, следующая — описание; если
+          занята одна колонка, это описание;
+        - товаров в файле — не больше 50 (настройка `MAX_BATCH_ITEMS`).
+
+        В модель уходит «название, описание»; если названия нет или описание уже содержит его —
+        только описание.
+
+        **Ошибки.** Ошибка одного товара не отменяет остальные: запрос отвечает `200`, а у товара
+        вместо `result` приходит `error`. Статусы 4xx — только про сам файл.
+
+        Файл на 50 товаров обрабатывается около 10 секунд — показывайте индикатор загрузки.
+      operationId: analyzeBatch
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Таблица с товарами — `.csv`, `.xlsx` или `.xls`.
+      responses:
+        "200":
+          description: Файл прочитан, товары обработаны. У каждого товара — `result` или `error`.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResult"
+              example:
+                items:
+                  - row: 2
+                    name: Молоток слесарный
+                    description: ручка 25 см, масса 600 грамм, безынерцыонный, противоскользящая рукоятка
+                    result:
+                      session_id: M4LPKW7CKPY2XGVQDBFKNVEKRR
+                      corrections:
+                        - from: безынерцыонный
+                          to: безынерционный
+                          reason: опечатка (отличается на 1 симв.)
+                      characteristics:
+                        - name: Тип
+                          value: Слесарный
+                          source: ktru
+                          origin: ktru
+                          confidence: 1
+                          user_text: слесарный
+                          used_for_narrowing: true
+                          used_for_reranking: false
+                      candidates:
+                        - code: 25.73.30.141-00000012
+                          name: Молоток
+                          score: 0.97
+                      candidates_total: 1
+                      errors: []
+                      missing_required: []
+                      next_step: null
+                      ktru: 25.73.30.141-00000012
+                      ktru_name: Молоток
+                      steps:
+                        - stage: Поиск по описанию
+                          count: 11
+                        - stage: Тип = Слесарный
+                          count: 1
+                  - row: 5
+                    description: халат детский для девочки, хлопок, размер 32 …
+                    error:
+                      code: invalid_text
+                      message: Описание длиннее 2000 символов
+        "413":
+          description: "`file_too_large` — файл больше лимита тела запроса."
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: file_too_large
+                  message: "Файл слишком большой: допускается не больше 1024 КБ"
+                  request_id: IH5TYGTVDQJ7XNOCRXKUG6Q6AC
+        "422":
+          description: |
+            Файл не принят:
+            - `validation_error` — тело не `multipart/form-data` или в нём нет поля `file`;
+            - `invalid_file` — расширение не `.csv`/`.xlsx`/`.xls`, файл не читается, в нём нет
+              товаров или их больше лимита.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                unsupported_format:
+                  value:
+                    error:
+                      code: invalid_file
+                      message: Формат файла не поддерживается. Загрузите .csv, .xlsx или .xls
+                      request_id: ZBQQXSVMPRJXB7TYFEYLNVYPR5
+                no_products:
+                  value:
+                    error:
+                      code: invalid_file
+                      message: "В файле не найдено товаров: у товара должно быть описание"
+                      request_id: KZYDI7HDCWH7QY7IEY4ZANEDJK
+                too_many_products:
+                  value:
+                    error:
+                      code: invalid_file
+                      message: "Товаров в файле: 51. За один раз обрабатывается не больше 50"
+                      request_id: UALHKCNQWWRFL4SCAGINTWDMFC
+                no_file_field:
+                  value:
+                    error:
+                      code: validation_error
+                      message: Некорректный запрос
+                      request_id: UQBMFRGO6YGN6VVETRZLQGYMP3
+                      details: ["file: required file field"]
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/sessions/{session_id}/answers:
+    post:
+      tags: [Подбор кода КТРУ]
+      summary: Ответить на уточняющий вопрос
+      description: |
+        Отвечает на текущий вопрос `next_step` сессии. Присылается только выбранный вариант —
+        строка из `next_step.options` в точности. Какой это был вопрос, агрегатор помнит сам.
+        Ответ того же формата, что у `POST /api/v1/analyze`, с тем же `session_id`.
+
+        Сессия живёт час с последнего обращения (настройка `SESSION_TTL_S`); после этого —
+        `404 session_not_found`, подбор начинается заново.
+      operationId: answer
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          description: "`session_id` из ответа `POST /api/v1/analyze` или из `items[].result` пакетного ответа."
+          schema:
+            type: string
+          example: 2SCEM3LPMN6KXPWDQELGXAZFAV
+        - $ref: "#/components/parameters/RequestID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnswerRequest"
+            example:
+              value: Стул ученический лабораторный
+      responses:
+        "200":
+          $ref: "#/components/responses/AnalysisResult"
+        "404":
+          description: "`session_not_found` — сессии нет: неверный идентификатор или истёк срок хранения."
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: session_not_found
+                  message: Сессия не найдена или устарела. Начните подбор заново
+                  request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+        "409":
+          description: "`no_pending_question` — в сессии нет вопроса: `next_step` был `null`."
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: no_pending_question
+                  message: В сессии нет вопроса, ожидающего ответа
+                  request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+        "422":
+          description: |
+            Запрос отклонён:
+            - `validation_error` — тело не JSON-объект или нет непустой строки `value`;
+            - `invalid_answer` — `value` не входит в `next_step.options`.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalid_answer:
+                  value:
+                    error:
+                      code: invalid_answer
+                      message: Выберите один из предложенных вариантов
+                      request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+                validation_error:
+                  value:
+                    error:
+                      code: validation_error
+                      message: Некорректный запрос
+                      request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+                      details: ["value: required non-empty string"]
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/ModelBadResponse"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+        "504":
+          $ref: "#/components/responses/ModelTimeout"
+
+  /health:
+    get:
+      tags: [Служебное]
+      summary: Проверка, что агрегатор запущен
+      description: Доступность модели и Redis не проверяет.
+      operationId: health
+      responses:
+        "200":
+          description: Процесс агрегатора жив.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+
+components:
+  parameters:
+    RequestID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: |
+        Свой идентификатор запроса: до 128 символов из `A-Za-z0-9._:-`. Если заголовка нет или он
+        не подходит, агрегатор создаёт идентификатор сам.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
+
+  headers:
+    RequestID:
+      description: Идентификатор запроса в логах агрегатора и модели.
+      schema:
+        type: string
+      example: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+
+  responses:
+    AnalysisResult:
+      description: Результат анализа и состояние диалога.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AnalysisResult"
+          examples:
+            needs_answer:
+              summary: Подходит несколько кодов — задан уточняющий вопрос
+              value:
+                session_id: WSYHULBNV5EKH4Q6JQLSPOAS5P
+                corrections: []
+                characteristics:
+                  - name: Форма основания
+                    value: Колесные опоры
+                    source: ktru
+                    origin: ktru
+                    confidence: 0.8
+                    user_text: колесиках
+                    used_for_narrowing: true
+                    used_for_reranking: false
+                  - name: Вид материала обивки
+                    value: Кожа искусственная
+                    source: ktru
+                    origin: ktru
+                    confidence: 0.8
+                    user_text: кожзам
+                    used_for_narrowing: true
+                    used_for_reranking: false
+                  - name: Высота стеллажа
+                    value: 110 см
+                    source: user
+                    origin: new
+                    confidence: 0.95
+                    user_text: 110 см
+                    used_for_narrowing: false
+                    used_for_reranking: true
+                product_intent: стул
+                subtype_context:
+                  - value: Офисный
+                    source: user
+                    user_text: офисный
+                    used_for_narrowing: false
+                    used_for_reranking: true
+                retrieval_count: 31
+                compatible_count: 24
+                remaining_count: 24
+                candidates:
+                  - code: 31.01.11.150-00000014
+                    name: Стул ученический лабораторный
+                    score: 0.9841
+                  - code: 31.09.14.110-00000001
+                    name: Стул пластиковый
+                    score: 0.9816
+                candidates_total: 24
+                errors:
+                  - type: not_in_ktru
+                    severity: info
+                    message: "Для «найденных товаров» сохранены дополнительные признаки: «Высота стеллажа». Они не исключают коды КТРУ."
+                missing_required: [Наличие мягкой спинки, Регулировка по высоте, Тип каркаса]
+                next_step:
+                  message: "Осталось 24 кода разных товаров. Уточните вид товара:"
+                  characteristic: null
+                  options: [Стул ученический лабораторный, Стул пластиковый, Стул ученический]
+                next_question:
+                  message: "Осталось 24 кода разных товаров. Уточните вид товара:"
+                  characteristic: null
+                  options: [Стул ученический лабораторный, Стул пластиковый, Стул ученический]
+                ktru: null
+                ktru_name: null
+                steps:
+                  - stage: Поиск по описанию
+                    count: 31
+                  - stage: Наименование содержит «стул»
+                    count: 24
+                  - stage: Форма основания = Колесные опоры
+                    count: 24
+            done:
+              summary: Код КТРУ определён
+              value:
+                session_id: M4LPKW7CKPY2XGVQDBFKNVEKRR
+                corrections:
+                  - from: безынерцыонный
+                    to: безынерционный
+                    reason: опечатка (отличается на 1 симв.)
+                characteristics:
+                  - name: Тип
+                    value: Слесарный
+                    source: ktru
+                    origin: ktru
+                    confidence: 1
+                    user_text: слесарный
+                    used_for_narrowing: true
+                    used_for_reranking: false
+                  - name: Противоскользящая рукоятка
+                    value: Да
+                    source: user
+                    origin: new
+                    confidence: 0.5
+                    user_text: противоскользящая рукоятка
+                    used_for_narrowing: false
+                    used_for_reranking: false
+                candidates:
+                  - code: 25.73.30.141-00000012
+                    name: Молоток
+                    score: 0.97
+                candidates_total: 1
+                errors:
+                  - type: not_in_ktru
+                    severity: info
+                    message: "Для «Молоток» сохранены дополнительные признаки: «Противоскользящая рукоятка». Они не исключают коды КТРУ."
+                missing_required: []
+                next_step: null
+                ktru: 25.73.30.141-00000012
+                ktru_name: Молоток
+                steps:
+                  - stage: Поиск по описанию
+                    count: 11
+                  - stage: Тип = Слесарный
+                    count: 1
+    InternalError:
+      description: "`internal_error` — непредвиденная ошибка агрегатора."
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: internal_error
+              message: Внутренняя ошибка сервиса
+              request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+    ModelBadResponse:
+      description: "`model_bad_response` — модель ответила ошибкой или не в ожидаемом формате."
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: model_bad_response
+              message: Модельный сервис ответил с ошибкой. Повторите запрос позже
+              request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+    Unavailable:
+      description: |
+        Недоступен соседний сервис:
+        - `model_unavailable` — модельный сервис;
+        - `storage_unavailable` — Redis с сессиями.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            model_unavailable:
+              value:
+                error:
+                  code: model_unavailable
+                  message: Модельный сервис недоступен. Повторите запрос позже
+                  request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+            storage_unavailable:
+              value:
+                error:
+                  code: storage_unavailable
+                  message: Хранилище сессий недоступно. Повторите запрос позже
+                  request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+    ModelTimeout:
+      description: "`model_timeout` — модель не ответила за 30 секунд (настройка `MODEL_TIMEOUT_S`)."
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: model_timeout
+              message: Модельный сервис не ответил вовремя. Повторите запрос позже
+              request_id: PJ7XQ2M4ZK3LDW5RBNC6YTHF2A
+
+  schemas:
+    AnalyzeRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: |
+            Описание товара как его ввёл пользователь. Не пустое и не только из пробелов и
+            невидимых символов; не длиннее 2000 символов (настройка `MAX_TEXT_LENGTH`).
+
+    AnswerRequest:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: string
+          minLength: 1
+          description: Один из `next_step.options`, строка в точности.
+
+    AnalysisResult:
+      type: object
+      description: |
+        Результат анализа описания и состояние диалога. Состояние читается по двум полям:
+        `next_step != null` — нужен ответ пользователя; иначе `ktru != null` — код определён,
+        `ktru == null` — товар не найден.
+      required:
+        - session_id
+        - corrections
+        - characteristics
+        - candidates
+        - candidates_total
+        - errors
+        - missing_required
+        - next_step
+        - ktru
+        - ktru_name
+        - steps
+      properties:
+        session_id:
+          type: string
+          description: Идентификатор сессии для ответов на вопросы. Непрозрачная строка.
+        corrections:
+          type: array
+          description: "Что исправлено в тексте: опечатки, раскладка, приведение слов к значениям КТРУ."
+          items:
+            $ref: "#/components/schemas/Correction"
+        characteristics:
+          type: array
+          description: Характеристики, извлечённые из описания и выбранные в ответах.
+          items:
+            $ref: "#/components/schemas/Characteristic"
+        product_intent:
+          type: string
+          description: Товар, как его поняла модель (лемма). Поля может не быть.
+        subtype_context:
+          type: array
+          description: Слова описания, уточняющие вид товара. Влияют на порядок кандидатов, но не исключают коды. Поля может не быть.
+          items:
+            $ref: "#/components/schemas/ContextSignal"
+        retrieval_count:
+          type: integer
+          description: Сколько кодов найдено поиском по описанию. Поля может не быть.
+        compatible_count:
+          type: integer
+          description: Сколько из них осталось после проверки названия товара. Поля может не быть.
+        remaining_count:
+          type: integer
+          description: Сколько осталось после проверки характеристик КТРУ. Поля может не быть.
+        candidates:
+          type: array
+          description: Оставшиеся коды КТРУ в порядке убывания соответствия, не больше 20.
+          items:
+            $ref: "#/components/schemas/Candidate"
+        candidates_total:
+          type: integer
+          description: Сколько кодов КТРУ подходит всего; `candidates[]` — первые из них.
+        errors:
+          type: array
+          description: Ошибки, предупреждения и уведомления по описанию товара.
+          items:
+            $ref: "#/components/schemas/AnalysisError"
+        missing_required:
+          type: array
+          description: |
+            Обязательные характеристики КТРУ оставшихся позиций, которых нет в описании. Пусто,
+            когда код определён или товар не найден.
+          items:
+            type: string
+        next_step:
+          $ref: "#/components/schemas/NextStep"
+        next_question:
+          $ref: "#/components/schemas/NextStep"
+        ktru:
+          type: string
+          nullable: true
+          description: Итоговый код КТРУ, когда он определён однозначно. Код обозначает группу товаров, а не модель.
+          example: 25.73.30.141-00000012
+        ktru_name:
+          type: string
+          nullable: true
+          description: Наименование позиции КТРУ с кодом `ktru`.
+        steps:
+          type: array
+          description: Как сужался список кодов, по шагам.
+          items:
+            $ref: "#/components/schemas/Step"
+
+    Correction:
+      type: object
+      required: [from, to, reason]
+      properties:
+        from:
+          type: string
+          description: Фрагмент исходного текста.
+        to:
+          type: string
+          description: На что он заменён.
+        reason:
+          type: string
+          nullable: true
+          description: Почему это считается ошибкой.
+
+    Characteristic:
+      type: object
+      required: [name, value, origin, confidence]
+      properties:
+        name:
+          type: string
+          description: Название характеристики.
+        value:
+          type: string
+          description: Значение. У числовых характеристик КТРУ — диапазон справочника.
+        unit:
+          type: string
+          description: Единица измерения. Есть только у числовых характеристик.
+        origin:
+          type: string
+          enum: [ktru, portal, new, answer]
+          description: |
+            Откуда характеристика — для бейджа в интерфейсе:
+            - `ktru` — справочник КТРУ;
+            - `portal` — справочник Портала поставщиков;
+            - `new` — новая, её нет ни в КТРУ, ни на Портале;
+            - `answer` — выбрана пользователем в ответе на вопрос.
+        source:
+          type: string
+          description: "Происхождение значения: `ktru`, `portal` или `user`. Поля может не быть."
+        user_text:
+          type: string
+          description: Фрагмент текста пользователя, из которого извлечено значение. Поля может не быть.
+        confidence:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 1
+          description: Уверенность извлечения.
+        used_for_narrowing:
+          type: boolean
+          description: Характеристика сужала список кодов КТРУ. Поля может не быть.
+        used_for_reranking:
+          type: boolean
+          description: Характеристика меняла порядок кандидатов. Поля может не быть.
+
+    ContextSignal:
+      type: object
+      required: [value, source, user_text, used_for_narrowing, used_for_reranking]
+      properties:
+        value:
+          type: string
+        source:
+          type: string
+          description: "Происхождение: `ktru`, `portal` или `user`."
+        user_text:
+          type: string
+          description: Фрагмент текста пользователя.
+        used_for_narrowing:
+          type: boolean
+        used_for_reranking:
+          type: boolean
+
+    Candidate:
+      type: object
+      required: [code, name, score]
+      properties:
+        code:
+          type: string
+          description: Код КТРУ.
+          example: 31.01.11.150-00000014
+        name:
+          type: string
+          description: Наименование позиции.
+        score:
+          type: number
+          nullable: true
+          description: Оценка соответствия описанию.
+
+    AnalysisError:
+      type: object
+      required: [type, severity, message]
+      properties:
+        type:
+          type: string
+          description: |
+            Вид замечания. Сейчас модель возвращает: `nonexistent_value`, `out_of_range`,
+            `unit_mismatch`, `conflict`, `contradiction`, `product_not_found`, `invalid_input`,
+            `suspicious_value`, `multiple_values`, `portal_unknown_value`, `invalid_answer`,
+            `not_in_ktru`. Список может расти — неизвестный вид показывайте по `severity`.
+        severity:
+          type: string
+          enum: [error, warning, info]
+          description: |
+            - `error` — ошибка в описании;
+            - `warning` — стоит проверить;
+            - `info` — уведомление, не ошибка (например, `not_in_ktru`: характеристики вне КТРУ
+              сохранены и на выбор кода не влияют).
+        message:
+          type: string
+          description: Объяснение для пользователя.
+        characteristic:
+          type: string
+          description: К какой характеристике относится. Поля может не быть.
+        suggestion:
+          type: string
+          description: Предлагаемое исправление. Поля может не быть.
+
+    NextStep:
+      type: object
+      nullable: true
+      description: |
+        Уточняющий вопрос пользователю или `null`, когда спрашивать нечего. Поле `next_question`
+        дублирует `next_step` и может отсутствовать; интерфейс использует `next_step`.
+      required: [message, characteristic, options]
+      properties:
+        message:
+          type: string
+          description: Текст вопроса.
+        characteristic:
+          type: string
+          nullable: true
+          description: |
+            Название характеристики, о которой спрашиваем. `null`, когда спрашиваем, какой это
+            товар или какой код выбрать — тогда `options` содержит названия товаров или коды.
+        options:
+          type: array
+          description: Варианты ответа. Один из них отправляется в `value`.
+          items:
+            type: string
+
+    Step:
+      type: object
+      required: [stage, count]
+      properties:
+        stage:
+          type: string
+          description: Что проверялось на этом шаге.
+        count:
+          type: integer
+          description: Сколько кодов осталось после шага.
+
+    BatchResult:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: Товары в порядке строк таблицы.
+          items:
+            $ref: "#/components/schemas/BatchItem"
+
+    BatchItem:
+      type: object
+      description: Товар из таблицы. Есть ровно одно из полей `result` и `error`.
+      required: [row, description]
+      properties:
+        row:
+          type: integer
+          minimum: 1
+          description: Номер строки в файле, с 1.
+        name:
+          type: string
+          description: Название товара. Поля нет, если в строке нет названия.
+        description:
+          type: string
+          description: Описание товара из файла.
+        result:
+          $ref: "#/components/schemas/AnalysisResult"
+        error:
+          $ref: "#/components/schemas/BatchItemError"
+
+    BatchItemError:
+      type: object
+      description: Почему товар не обработан.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - invalid_text
+            - model_bad_response
+            - model_unavailable
+            - model_timeout
+            - storage_unavailable
+            - internal_error
+        message:
+          type: string
+          description: Короткий текст для пользователя.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: Машиночитаемый код ошибки.
+              enum:
+                - validation_error
+                - invalid_text
+                - invalid_answer
+                - invalid_file
+                - file_too_large
+                - session_not_found
+                - no_pending_question
+                - not_found
+                - model_bad_response
+                - model_unavailable
+                - model_timeout
+                - storage_unavailable
+                - internal_error
+            message:
+              type: string
+              description: Короткий текст для пользователя на русском, без внутренних подробностей.
+            request_id:
+              type: string
+              description: Совпадает с заголовком `X-Request-ID` ответа.
+            details:
+              type: array
+              description: Что не так с телом запроса. Только у `validation_error`.
+              items:
+                type: string

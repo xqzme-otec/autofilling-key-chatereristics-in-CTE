@@ -27,20 +27,26 @@ type Model interface {
 	Analyze(ctx context.Context, text string, answers []domain.Answer) (*domain.AnalysisResult, error)
 }
 
-type Analysis struct {
-	sessions      repository.SessionRepository
-	model         Model
-	maxTextLength int
+type Limits struct {
+	MaxTextLength    int // characters in a product description
+	MaxBatchItems    int // products in an uploaded table
+	BatchConcurrency int // products of a table analyzed at the same time
 }
 
-func NewAnalysis(sessions repository.SessionRepository, model Model, maxTextLength int) *Analysis {
-	return &Analysis{sessions: sessions, model: model, maxTextLength: maxTextLength}
+type Analysis struct {
+	sessions repository.SessionRepository
+	model    Model
+	limits   Limits
+}
+
+func NewAnalysis(sessions repository.SessionRepository, model Model, limits Limits) *Analysis {
+	return &Analysis{sessions: sessions, model: model, limits: limits}
 }
 
 // Start creates a session from a free-form product description.
 func (s *Analysis) Start(ctx context.Context, text string) (*domain.Session, error) {
-	if utf8.RuneCountInString(text) > s.maxTextLength {
-		return nil, domain.Errorf(domain.CodeInvalidText, "Описание длиннее %d символов", s.maxTextLength)
+	if utf8.RuneCountInString(text) > s.limits.MaxTextLength {
+		return nil, domain.Errorf(domain.CodeInvalidText, "Описание длиннее %d символов", s.limits.MaxTextLength)
 	}
 	if blank(text) {
 		return nil, domain.Errorf(domain.CodeInvalidText, "Описание товара пустое")

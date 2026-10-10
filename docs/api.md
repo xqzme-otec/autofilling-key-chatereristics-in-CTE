@@ -31,7 +31,8 @@ Frontend ──HTTP/JSON──▶ Aggregator (backend/aggregator-service/, Go, :
 ## 2. Архитектура агрегатора
 
 Go 1.26, `net/http` из стандартной библиотеки, Redis через `github.com/redis/go-redis/v9`,
-логи через `go.uber.org/zap`.
+логи через `go.uber.org/zap`. Таблицы с товарами читают `github.com/xuri/excelize/v2` (`.xlsx`) и
+`github.com/shakinm/xlsReader` (`.xls`); `.csv` — стандартная библиотека.
 
 ```
 backend/aggregator-service/
@@ -41,12 +42,13 @@ backend/aggregator-service/
     config/                настройки из переменных окружения
     logger/                zap-логгер; request_id и логгер запроса в context
     domain/                сущности (Session, Answer, AnalysisResult) и доменные ошибки с кодами
-    service/               сценарий диалога: проверка → модель → сессия
+    service/               сценарий диалога: проверка → модель → сессия; то же для каждого товара таблицы
+    sheet/                 чтение загруженной таблицы (.csv, .xlsx, .xls) в строки ячеек
     repository/            интерфейс SessionRepository и его реализация на Redis
     database/              подключение к Redis
     client/model/          клиент модельного сервиса (POST /analyze), проверка его ответа
     transport/http/        маршруты, схема ответа фронтенду, коды ошибок → HTTP-статусы, CORS,
-                           request_id и строка лога на каждый запрос
+                           request_id и строка лога на каждый запрос; openapi.yaml и страница /docs
 ```
 
 Зависимости направлены только вниз: `transport/http → service → repository → domain`.
@@ -76,6 +78,14 @@ backend/aggregator-service/
 ## 3. API агрегатора (для фронтенда)
 
 Базовый URL: `http://localhost:8000`.
+
+**Swagger.** Тот же контракт в формате OpenAPI 3 —
+[`openapi.yaml`](../backend/aggregator-service/internal/transport/http/openapi.yaml). Запущенный
+агрегатор показывает его в Swagger UI на `http://localhost:8000/docs` (запросы можно выполнять
+прямо со страницы) и отдаёт сам файл на `http://localhost:8000/docs/openapi.yaml`. Скрипты
+Swagger UI загружаются с CDN, поэтому странице нужен интернет. Через nginx фронтенда (`:8080`)
+страница недоступна: он проксирует только `/api/`. Файл пишется вручную — при изменении маршрутов
+или полей ответа он обновляется вместе с этим документом.
 
 ### Сценарий
 
@@ -175,6 +185,62 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
 
 Агрегатор сокращает полный ответ модели (`ML.md`) до этих полей.
 
+### `POST /api/v1/analyze/batch`
+
+Создаёт сессии сразу для всех товаров из таблицы. Каждый товар обрабатывается так же, как текст в
+`POST /api/v1/analyze`, и получает свою обычную сессию: на её вопросы отвечают через
+`POST /api/v1/sessions/{session_id}/answers`.
+
+Запрос — `multipart/form-data` с файлом в поле `file`:
+
+```bash
+curl -s -X POST localhost:8000/api/v1/analyze/batch -F 'file=@products.xlsx'
+```
+
+| Что | Правило |
+|---|---|
+| Формат | `.csv`, `.xlsx` или `.xls`, определяется по расширению имени файла. Из книги Excel читается первый лист |
+| Размер | тело запроса не больше `MAX_BODY_BYTES` (по умолчанию 1 МБ) |
+| CSV | кодировка UTF-8 (с BOM или без) или Windows-1251; разделитель определяется по первой строке: табуляция, иначе `;`, иначе `,`. При разделителе `,` описание с запятыми берётся в кавычки |
+| Колонки | если в первой непустой строке есть заголовок, начинающийся с «Описание», «Характеристики» или `Description`, колонки берутся по заголовкам; название — колонка с заголовком на «Название», «Наименование», «Товар» или `Name`. Без такой строки заголовков нет: первая занятая колонка — название, следующая — описание; если занята одна колонка, это описание |
+| Товар | строка с непустым описанием. Название необязательно; строка с одним названием и пустые строки пропускаются |
+| Сколько товаров | не больше `MAX_BATCH_ITEMS` (по умолчанию 50) |
+
+В модель уходит «название, описание»; если названия нет или описание уже содержит его — только
+описание. Товары обрабатываются параллельно, по `BATCH_CONCURRENCY` (по умолчанию 4).
+
+Ответ `200`:
+
+```json
+{
+  "items": [
+    {
+      "row": 2,
+      "name": "Стул",
+      "description": "офисный на колесиках, кожзам, высота 110 см",
+      "result": {"session_id": "2SCEM3LPMN6KXPWDQELGXAZFAV", "...": "как в ответе POST /api/v1/analyze"}
+    },
+    {
+      "row": 5,
+      "description": "…",
+      "error": {"code": "invalid_text", "message": "Описание длиннее 2000 символов"}
+    }
+  ]
+}
+```
+
+| Поле | Описание |
+|---|---|
+| `items[]` | товары в порядке строк таблицы |
+| `row` | номер строки в файле, с 1 |
+| `name` | название товара; поля нет, если названия нет |
+| `description` | описание товара из файла |
+| `result` | результат анализа в формате `POST /api/v1/analyze`, с `session_id` |
+| `error` | `code` и `message`, если товар не обработан: коды те же, что в таблице ошибок ниже (`invalid_text`, `model_*`, `storage_unavailable`). В элементе есть либо `result`, либо `error` |
+
+Ошибка одного товара не отменяет остальные: запрос отвечает `200`, если файл прочитан и товары в
+нём найдены. Ошибки самого файла — в таблице ошибок ниже.
+
 ### `POST /api/v1/sessions/{session_id}/answers`
 
 Ответ на текущий вопрос `next_step`. Фронтенд присылает только выбранный вариант; тип вопроса
@@ -212,9 +278,11 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
 | 404 | `session_not_found` | сессии нет (неверный id или истёк TTL) — начать заново через `/analyze` |
 | 404 | `not_found` | несуществующий маршрут |
 | 409 | `no_pending_question` | в сессии нет вопроса (`next_step` = `null`) |
+| 413 | `file_too_large` | загруженный файл больше `MAX_BODY_BYTES` |
 | 422 | `validation_error` | тело запроса не соответствует схеме; подробности в `error.details` |
 | 422 | `invalid_text` | текст пустой или слишком длинный |
 | 422 | `invalid_answer` | `value` не входит в `next_step.options` |
+| 422 | `invalid_file` | файл не `.csv`/`.xlsx`/`.xls`, не читается, в нём нет товаров или их больше `MAX_BATCH_ITEMS` |
 | 502 | `model_bad_response` | модель вернула не-200 или ответ не в ожидаемом формате |
 | 503 | `model_unavailable` | модельный сервис недоступен |
 | 503 | `storage_unavailable` | Redis недоступен |
@@ -265,10 +333,12 @@ next_step == null, ktru == null  → товар не найден в КТРУ (�
 | `LISTEN_ADDR` | `:8000` | адрес HTTP-сервера |
 | `SHUTDOWN_TIMEOUT_S` | `8` | сколько секунд ждать завершения запросов при остановке |
 | `READ_HEADER_TIMEOUT_S` | `10` | таймаут чтения заголовков запроса, секунды |
-| `MAX_BODY_BYTES` | `1048576` | максимальный размер тела запроса, байты |
+| `MAX_BODY_BYTES` | `1048576` | максимальный размер тела запроса, байты; он же ограничивает загружаемый файл |
 | `MODEL_SERVICE_URL` | `http://localhost:8001` (в Docker — `http://model:8001`) | адрес модельного сервиса |
 | `MODEL_TIMEOUT_S` | `30` | таймаут запроса к модели, секунды |
 | `MAX_TEXT_LENGTH` | `2000` | максимальная длина текста |
+| `MAX_BATCH_ITEMS` | `50` | сколько товаров принимается в одной таблице |
+| `BATCH_CONCURRENCY` | `4` | сколько товаров таблицы обрабатывается одновременно |
 | `REDIS_URL` | `redis://localhost:6379/0` (в Docker — `redis://redis:6379/0`) | адрес Redis для сессий |
 | `REDIS_PING_TIMEOUT_S` | `5` | таймаут проверки Redis при старте, секунды |
 | `REDIS_OP_TIMEOUT_S` | `3` | таймаут одной операции с Redis, секунды |
@@ -302,6 +372,7 @@ curl -s -X POST localhost:8000/api/v1/analyze -H 'Content-Type: application/json
      -d '{"text": "стл на металлическом каркасе"}'
 curl -s -X POST localhost:8000/api/v1/sessions/<session_id>/answers -H 'Content-Type: application/json' \
      -d '{"value": "Нет"}'
+curl -s -X POST localhost:8000/api/v1/analyze/batch -F 'file=@products.csv'
 ```
 
 На Windows в Git Bash кириллица в аргументах `curl` портится — передавайте тело из UTF-8 файла:

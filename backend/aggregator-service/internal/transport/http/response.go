@@ -8,6 +8,7 @@ import (
 
 	"github.com/xqzme-otec/autofilling-key-chatereristics-in-CTE/backend/aggregator-service/internal/domain"
 	"github.com/xqzme-otec/autofilling-key-chatereristics-in-CTE/backend/aggregator-service/internal/logger"
+	"github.com/xqzme-otec/autofilling-key-chatereristics-in-CTE/backend/aggregator-service/internal/service"
 )
 
 // sessionResponse is a reduced view of the model output agreed with the frontend: only the
@@ -66,6 +67,40 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 	return out
 }
 
+// batchResponse lists the products of an uploaded table in the order of its rows.
+type batchResponse struct {
+	Items []batchItemResponse `json:"items"`
+}
+
+// batchItemResponse carries either Result, the same body POST /api/v1/analyze returns, or Error.
+type batchItemResponse struct {
+	Row         int              `json:"row"`
+	Name        string           `json:"name,omitempty"`
+	Description string           `json:"description"`
+	Result      *sessionResponse `json:"result,omitempty"`
+	Error       *itemError       `json:"error,omitempty"`
+}
+
+type itemError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func newBatchResponse(items []service.BatchItem) batchResponse {
+	out := batchResponse{Items: make([]batchItemResponse, len(items))}
+	for i, item := range items {
+		out.Items[i] = batchItemResponse{Row: item.Row, Name: item.Name, Description: item.Description}
+		if item.Err != nil {
+			_, code, message := problem(item.Err)
+			out.Items[i].Error = &itemError{Code: code, Message: message}
+			continue
+		}
+		result := newSessionResponse(item.Session)
+		out.Items[i].Result = &result
+	}
+	return out
+}
+
 func nonNil[T any](s []T) []T {
 	if s == nil {
 		return []T{}
@@ -76,6 +111,7 @@ func nonNil[T any](s []T) []T {
 var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeInvalidText:        http.StatusUnprocessableEntity,
 	domain.CodeInvalidAnswer:      http.StatusUnprocessableEntity,
+	domain.CodeInvalidFile:        http.StatusUnprocessableEntity,
 	domain.CodeSessionNotFound:    http.StatusNotFound,
 	domain.CodeNoPendingQuestion:  http.StatusConflict,
 	domain.CodeModelBadResponse:   http.StatusBadGateway,
@@ -96,16 +132,21 @@ func respond(w http.ResponseWriter, session *domain.Session, err error) {
 // code and the short message only; the full error with its cause goes to the request log line.
 func writeError(w http.ResponseWriter, err error) {
 	logError(w, err)
+	status, code, message := problem(err)
+	writeProblem(w, status, code, message, nil)
+}
+
+// problem is what the client learns about err: the HTTP status, the code and the short message.
+func problem(err error) (status int, code, message string) {
 	var de *domain.Error
 	if !errors.As(err, &de) {
-		writeProblem(w, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка сервиса", nil)
-		return
+		return http.StatusInternalServerError, "internal_error", "Внутренняя ошибка сервиса"
 	}
 	status, ok := statusByCode[de.Code]
 	if !ok {
 		status = http.StatusInternalServerError
 	}
-	writeProblem(w, status, string(de.Code), de.Message, nil)
+	return status, string(de.Code), de.Message
 }
 
 // invalidRequest writes a validation_error; detail says what is wrong with the request body.

@@ -8,6 +8,7 @@ type ErrorCode string
 const (
 	CodeInvalidText        ErrorCode = "invalid_text"
 	CodeInvalidAnswer      ErrorCode = "invalid_answer"
+	CodeInvalidFile        ErrorCode = "invalid_file"
 	CodeSessionNotFound    ErrorCode = "session_not_found"
 	CodeNoPendingQuestion  ErrorCode = "no_pending_question"
 	CodeModelUnavailable   ErrorCode = "model_unavailable"

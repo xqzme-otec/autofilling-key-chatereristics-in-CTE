@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -124,7 +126,7 @@ func setupWithModelURL(t *testing.T, fm *fakeModel, modelURL string) *testEnv {
 	analysis := service.NewAnalysis(
 		repository.NewRedisSessionRepository(rdb, time.Hour, time.Second),
 		model.NewClient(modelURL, 300*time.Millisecond),
-		100,
+		service.Limits{MaxTextLength: 100, MaxBatchItems: 5, BatchConcurrency: 2},
 	)
 	api := httptest.NewServer(httptransport.NewRouter(analysis, []string{"*"}, 1<<20))
 	t.Cleanup(api.Close)
@@ -453,5 +455,152 @@ func TestUnknownRouteUsesErrorFormat(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&body)
 	if resp.StatusCode != 404 || errCode(body) != "not_found" {
 		t.Errorf("got %d %v", resp.StatusCode, body)
+	}
+}
+
+// upload posts a table to the batch endpoint as the "file" field of a multipart form.
+func (e *testEnv) upload(t *testing.T, field, filename, content string) (int, map[string]any) {
+	t.Helper()
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	part, _ := form.CreateFormFile(field, filename)
+	io.WriteString(part, content)
+	form.Close()
+	resp, err := http.Post(e.api.URL+"/api/v1/analyze/batch", form.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, out
+}
+
+// Every product of the table gets its own session, as if sent to /analyze one by one; a row the
+// service rejects is reported in its item and does not fail the others.
+func TestBatchAnalyzesEveryProduct(t *testing.T) {
+	e := setup(t)
+	tooLong := strings.Repeat("я", 101)
+	status, body := e.upload(t, "file", "products.csv", "Название;Описание\n"+
+		"Стул;стл на металлическом каркасе\n"+
+		"Халат детский;\n"+
+		"\n"+
+		";"+tooLong+"\n"+
+		";стл офисный\n")
+	if status != 200 {
+		t.Fatalf("%d %v", status, body)
+	}
+
+	items := body["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("items: got %v", items)
+	}
+	first, failed, last := items[0].(map[string]any), items[1].(map[string]any), items[2].(map[string]any)
+	result := first["result"].(map[string]any)
+	id := result["session_id"].(string)
+	delete(first, "result")
+	jsonEq(t, first, `{"row": 2, "name": "Стул", "description": "стл на металлическом каркасе"}`)
+	jsonEq(t, result["next_step"], `{"message": "Уточните характеристику:", "characteristic": "Наличие подлокотников", "options": ["Да", "Нет"]}`)
+	jsonEq(t, failed, `{"row": 5, "description": `+quoted(tooLong)+`,
+		"error": {"code": "invalid_text", "message": "Описание длиннее 100 символов"}}`)
+	if last["row"] != float64(6) || last["result"].(map[string]any)["session_id"] == id {
+		t.Errorf("last item: got %v", last)
+	}
+
+	// the model gets the name with the description, or the description alone
+	var sent []string
+	for _, r := range e.model.requests {
+		sent = append(sent, r["raw"].(string))
+	}
+	slices.Sort(sent)
+	if want := []string{"Стул, стл на металлическом каркасе", "стл офисный"}; !reflect.DeepEqual(sent, want) {
+		t.Errorf("sent to the model: got %q, want %q", sent, want)
+	}
+
+	// a session of the batch continues like any other
+	if status, body := e.answer(t, id, "Нет"); status != 200 || body["ktru"] != code1 {
+		t.Errorf("answer: got %d %v", status, body)
+	}
+}
+
+func TestBatchKeepsFailedRows(t *testing.T) {
+	e := setup(t)
+	e.model.reply = func(p map[string]any) (int, any) {
+		if p["raw"] == "стол" {
+			return 500, "boom"
+		}
+		return e.model.ok(p)
+	}
+	status, body := e.upload(t, "file", "products.csv", "стул\nстол\n")
+	if status != 200 {
+		t.Fatalf("%d %v", status, body)
+	}
+	items := body["items"].([]any)
+	if items[0].(map[string]any)["result"] == nil {
+		t.Errorf("first item: got %v", items[0])
+	}
+	jsonEq(t, items[1], `{"row": 2, "description": "стол", "error": {"code": "model_bad_response",
+		"message": "Модельный сервис ответил с ошибкой. Повторите запрос позже"}}`)
+}
+
+func TestBatchErrors(t *testing.T) {
+	e := setup(t)
+	cases := []struct {
+		name, field, filename, content string
+		status                         int
+		code                           string
+	}{
+		{"unsupported format", "file", "products.pdf", "%PDF", 422, "invalid_file"},
+		{"not a workbook", "file", "products.xlsx", "стул", 422, "invalid_file"},
+		{"no products", "file", "products.csv", "Название;Описание\nСтул;\n", 422, "invalid_file"},
+		{"empty file", "file", "products.csv", "", 422, "invalid_file"},
+		{"more products than MaxBatchItems", "file", "products.csv", strings.Repeat("стул\n", 6), 422, "invalid_file"},
+		{"another field", "upload", "products.csv", "стул\n", 422, "validation_error"},
+		{"larger than the body limit", "file", "products.csv", strings.Repeat("стул\n", 1<<18), 413, "file_too_large"},
+	}
+	for _, c := range cases {
+		if status, body := e.upload(t, c.field, c.filename, c.content); status != c.status || errCode(body) != c.code {
+			t.Errorf("%s: got %d %v", c.name, status, body)
+		}
+	}
+	if status, body := e.post(t, "/api/v1/analyze/batch", map[string]string{"text": "стул"}); status != 422 || errCode(body) != "validation_error" {
+		t.Errorf("JSON body: got %d %v", status, body)
+	}
+	if len(e.model.requests) != 0 {
+		t.Errorf("model was called: %v", e.model.requests)
+	}
+}
+
+// The Swagger page and the specification it loads; the specification covers every API route.
+func TestDocs(t *testing.T) {
+	e := setup(t)
+	get := func(path string) (*http.Response, string) {
+		t.Helper()
+		resp, err := http.Get(e.api.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp, string(body)
+	}
+
+	resp, page := get("/docs")
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") ||
+		!strings.Contains(page, `url: "/docs/openapi.yaml"`) {
+		t.Errorf("page: got %d %q %s", resp.StatusCode, resp.Header.Get("Content-Type"), page)
+	}
+
+	resp, spec := get("/docs/openapi.yaml")
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/yaml") ||
+		!strings.HasPrefix(spec, "openapi: 3.") {
+		t.Fatalf("specification: got %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, path := range []string{"/api/v1/analyze", "/api/v1/analyze/batch", "/api/v1/sessions/{session_id}/answers", "/health"} {
+		if !regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(path) + `:\r?$`).MatchString(spec) {
+			t.Errorf("specification has no path %s", path)
+		}
 	}
 }

@@ -22,6 +22,8 @@ type Config struct {
 	ModelServiceURL   string
 	ModelTimeout      time.Duration
 	MaxTextLength     int
+	MaxBatchItems     int
+	BatchConcurrency  int
 	RedisURL          string
 	RedisPingTimeout  time.Duration
 	RedisOpTimeout    time.Duration
@@ -61,8 +63,12 @@ func Load() (Config, error) {
 		ModelServiceURL:   strings.TrimRight(env("MODEL_SERVICE_URL", "http://localhost:8001"), "/"),
 		ModelTimeout:      sec("MODEL_TIMEOUT_S", 30),
 		MaxTextLength:     num("MAX_TEXT_LENGTH", 2000),
-		RedisURL:          env("REDIS_URL", "redis://localhost:6379/0"),
-		RedisPingTimeout:  sec("REDIS_PING_TIMEOUT_S", 5),
+		// A table is analyzed within one request: keep the batch small enough for the proxy
+		// in front of the API to wait for (proxy_read_timeout in frontend/nginx.conf).
+		MaxBatchItems:    num("MAX_BATCH_ITEMS", 50),
+		BatchConcurrency: num("BATCH_CONCURRENCY", 4),
+		RedisURL:         env("REDIS_URL", "redis://localhost:6379/0"),
+		RedisPingTimeout: sec("REDIS_PING_TIMEOUT_S", 5),
 		// Bounds every Redis call: when Redis is down, go-redis keeps retrying dials for over a minute.
 		RedisOpTimeout: sec("REDIS_OP_TIMEOUT_S", 3),
 		SessionTTL:     time.Duration(num("SESSION_TTL_S", 3600)) * time.Second,

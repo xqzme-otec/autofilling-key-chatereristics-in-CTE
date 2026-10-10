@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/xqzme-otec/autofilling-key-chatereristics-in-CTE/backend/aggregator-service/internal/logger"
 	"github.com/xqzme-otec/autofilling-key-chatereristics-in-CTE/backend/aggregator-service/internal/service"
+	"github.com/xqzme-otec/autofilling-key-chatereristics-in-CTE/backend/aggregator-service/internal/sheet"
 )
 
 type handler struct {
@@ -27,7 +29,10 @@ func NewRouter(analysis *service.Analysis, corsOrigins []string, maxBodyBytes in
 	h := &handler{analysis: analysis, maxBodyBytes: maxBodyBytes}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/analyze", h.analyze)
+	mux.HandleFunc("POST /api/v1/analyze/batch", h.analyzeBatch)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/answers", h.answer)
+	mux.HandleFunc("GET /docs", docs)
+	mux.HandleFunc("GET "+openAPIPath, openAPI)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -45,6 +50,46 @@ func (h *handler) analyze(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.analysis.Start(r.Context(), text)
 	respond(w, session, err)
+}
+
+// analyzeBatch starts a session for every product of an uploaded table: a multipart/form-data
+// body with the .csv, .xlsx or .xls file in the "file" field.
+func (h *handler) analyzeBatch(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
+	// The whole body is under the limit, so the file stays in memory: no temporary files.
+	if err := r.ParseMultipartForm(h.maxBodyBytes); err != nil {
+		if tooLarge := new(http.MaxBytesError); errors.As(err, &tooLarge) {
+			logError(w, err)
+			writeProblem(w, http.StatusRequestEntityTooLarge, "file_too_large",
+				fmt.Sprintf("Файл слишком большой: допускается не больше %d КБ", h.maxBodyBytes>>10), nil)
+			return
+		}
+		invalidRequest(w, "body: invalid multipart/form-data: "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		invalidRequest(w, "file: required file field")
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	rows, err := sheet.Read(header.Filename, data)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	items, err := h.analysis.StartBatch(r.Context(), rows)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newBatchResponse(items))
 }
 
 // answer answers the clarifying question (next_step) of the session with one of its options.

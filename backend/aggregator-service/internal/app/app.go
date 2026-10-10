@@ -31,7 +31,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 	analysis := service.NewAnalysis(
 		repository.NewRedisSessionRepository(rdb, cfg.SessionTTL, cfg.RedisOpTimeout),
 		model.NewClient(cfg.ModelServiceURL, cfg.ModelTimeout),
-		cfg.MaxTextLength,
+		service.Limits{MaxTextLength: cfg.MaxTextLength, MaxBatchItems: cfg.MaxBatchItems,
+			BatchConcurrency: cfg.BatchConcurrency},
 	)
 	serverLog, _ := zap.NewStdLogAt(log, zapcore.ErrorLevel) // fails only for an invalid level
 	srv := &http.Server{

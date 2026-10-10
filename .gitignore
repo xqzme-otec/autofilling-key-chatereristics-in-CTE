@@ -63,3 +63,6 @@ eval/cases_portal.jsonl
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local test table for POST /api/v1/analyze/batch
+/test_products.csv
