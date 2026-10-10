@@ -1,37 +1,37 @@
 from __future__ import annotations
 
-"""Точка входа ML: analyze(запрос) -> готовый JSON для фронта.
+"""ML entry point: analyze(request) -> ready JSON for the frontend.
 
-Вход (dict или просто строка):
+Input (a dict or just a string):
     {
       "raw": "стл офисный на колесиках, кожзам, высота 110 см",
-      "tokens": [...],                       # необязательно: токены от бэкенда {text, lemma, span, known}
-      "answers": [                           # необязательно: ответы на предыдущие вопросы next_step
+      "tokens": [...],                       # optional: tokens from the backend {text, lemma, span, known}
+      "answers": [                           # optional: answers to previous next_step questions
         {"type": "product", "value": "Стул офисный"},
         {"type": "characteristic", "characteristic": "Наличие подлокотников", "value": "Да"},
         {"type": "code", "value": "31.01.11.150-00000003"}
       ]
     }
 
-Выход:
-    input            — исходный текст;
-    text             — текст после нормализации и исправлений;
-    corrections      — исправления (опечатки, раскладка — span в input;
-                       приведение к значениям КТРУ — span в text);
-    characteristics  — {name, value, unit, source, span (в text), method, confidence, origin};
-                       source — фрагмент текста пользователя; origin — откуда характеристика:
-                       ktru (справочник КТРУ) | portal (справочник Портала) | new (нет ни там, ни там —
-                       сохраняем, не выбрасываем) | answer (выбрана пользователем из вариантов КТРУ);
-    candidates       — оставшиеся коды КТРУ {code, name, score}, candidates_total — их число;
+Output:
+    input            — the original text;
+    text             — the text after normalization and corrections;
+    corrections      — corrections (typos, keyboard layout — span in input;
+                       normalization to KTRU values — span in text);
+    characteristics  — {name, value, unit, source, span (in text), method, confidence, origin};
+                       source — fragment of the user text; origin — where the characteristic comes from:
+                       ktru (KTRU reference) | portal (portal reference) | new (in neither —
+                       kept, never dropped) | answer (chosen by the user from KTRU options);
+    candidates       — remaining KTRU codes {code, name, score}, candidates_total — their count;
     errors           — {type, severity, message, ...}: nonexistent_value, out_of_range, unit_mismatch,
                        conflict, contradiction, product_not_found, invalid_input (severity=error);
                        suspicious_value, multiple_values, portal_unknown_value, invalid_answer (warning);
-                       not_in_ktru (info) — признаки вне КТРУ, сохранённые как Портал / новые;
-    next_step        — что спросить у пользователя (type: product | characteristic | code) или null;
-    ktru, ktru_name  — итоговый код, когда он определён однозначно;
-    steps            — как сужался список кодов (для отображения);
-    missing_required — обязательные характеристики КТРУ оставшихся позиций, которых нет в описании;
-    timings_ms       — время этапов.
+                       not_in_ktru (info) — features outside KTRU, kept as portal / new;
+    next_step        — what to ask the user (type: product | characteristic | code) or null;
+    ktru, ktru_name  — the final code once it is determined unambiguously;
+    steps            — how the code list was narrowed (for display);
+    missing_required — required KTRU characteristics of the remaining positions missing from the description;
+    timings_ms       — stage timings.
 """
 import re
 import time
@@ -47,9 +47,9 @@ from ml.units import DIMENSION_NAMES, NumberMatcher
 from ml.values import GENERIC, ValueMatcher, _lemmas, _stem_eq
 
 SEARCH_K = 50
-MIN_SCORE_GAP = 0.03       # кандидаты, сильно отстающие от лидера по близости, отбрасываются
-NOT_FOUND_HARD = 0.80      # ниже — товара в КТРУ точно нет
-NOT_FOUND_SOFT = 0.86      # ниже — нет, если ни одно слово запроса не совпало с названиями кандидатов
+MIN_SCORE_GAP = 0.03       # candidates far behind the leader by similarity are dropped
+NOT_FOUND_HARD = 0.80      # below this the product is surely not in KTRU
+NOT_FOUND_SOFT = 0.86      # below this — not found if no query word matches candidate names
 MAX_CANDIDATES_OUT = 20
 VALUE_ERRORS = ("nonexistent_value", "out_of_range", "unit_mismatch")
 PUBLIC_CHAR_FIELDS = ("name", "value", "unit", "user_value", "source", "span", "method")
@@ -89,7 +89,7 @@ class Pipeline:
             timings[name] = round((now - t0) * 1000, 1)
             t0 = now
 
-        # 1. нормализация и исправления
+        # 1. normalization and corrections
         text = normalize(raw)
         tokens = request.get("tokens") if text == raw and isinstance(request.get("tokens"), list) else None
         text, corrections = self.corrector.fix_layout(text)
@@ -99,7 +99,7 @@ class Pipeline:
         corrections += typos
         tick("correct")
 
-        # 2. поиск кандидатов: весь текст + первый фрагмент (обычно это название товара)
+        # 2. candidate search: the whole text + the first fragment (usually the product name)
         head = text.split(",")[0]
         candidates = self.searcher.search(text, k=SEARCH_K, extra_queries=[head])
         not_found = self._not_found(head, candidates)
@@ -109,7 +109,7 @@ class Pipeline:
         codes = [c["code"] for c in candidates]
         tick("search")
 
-        # 3. характеристики: текстовые значения и числа
+        # 3. characteristics: text values and numbers
         # clothing sizes first («р. 52-54», «XL»): their numbers and letters are not taken by other matchers
         size_chars, size_errors, size_reserved, unmatched_sizes = self.sizes.match(text, codes)
         num_chars, num_errors, reserved, unmatched_numbers = self.numbers.match(text, codes, size_reserved)
@@ -147,11 +147,11 @@ class Pipeline:
             key=lambda f: -f["score"])
         tick("values")
 
-        # 4. сужение
+        # 4. narrowing
         remaining, next_step, steps, conflicts = narrow(characteristics, candidates, self.store, head, answers)
         tick("narrow")
 
-        # 5. то, что не легло на КТРУ, не выбрасываем: справочник Портала, иначе — новая характеристика
+        # 5. what did not fit KTRU is not dropped: the portal reference, otherwise a new characteristic
         extra_notices = []
         if not not_found and candidates:
             pool = remaining or candidates
@@ -181,10 +181,10 @@ class Pipeline:
                                   "инструменты). Уточните наименование товара; ниже — ближайшие по смыслу позиции."}]
             next_step = None
             errors = input_errors + errors
-        # значения проверяем по допустимым у найденных позиций; если сам товар определён неточно
-        # (наименование не совпало с текстом и не выбрано пользователем), это не ошибка пользователя
-        # «несуществующее значение» достаточно проверить по товарам с тем же главным словом («стул»);
-        # диапазоны и единицы — только у точно определённой позиции («сверло по металлу» ≠ «Сверло центровочное»)
+        # values are checked against those allowed for the found positions; if the product itself is uncertain
+        # (the name did not match the text and was not chosen by the user), it is not the user's error.
+        # A «nonexistent value» only needs products with the same head noun («стул»);
+        # ranges and units — only an exactly determined position («сверло по металлу» ≠ «Сверло центровочное»)
         exact = any(st["stage"].startswith(("Наименование:", "Выбран товар", "Выбран код")) for st in steps)
         by_noun = exact or any(st["stage"].startswith("Наименование содержит") for st in steps)
         for e in errors:
@@ -214,9 +214,9 @@ class Pipeline:
     def _extra_characteristics(self, text: str, category: str | None, taken: list[list[int]],
                                unmatched_numbers: list[dict], product_words: set,
                                pool: list[dict], characteristics_ref: list[dict] = ()) -> tuple[list[dict], list[dict]]:
-        """Признаки из описания, которых нет среди характеристик КТРУ найденных товаров:
-        справочник Портала («цвет синий» → «Цвет»), иначе новая характеристика
-        («с противоскользящей рукояткой» → «Противоскользящая рукоятка: Да»). Не выбрасываем ничего."""
+        """Features from the description that are not among the KTRU characteristics of the found products:
+        the portal reference («цвет синий» → «Цвет»), otherwise a new characteristic
+        («с противоскользящей рукояткой» → «Противоскользящая рукоятка: Да»). Nothing is dropped."""
         extra, notices, taken = [], [], list(taken)
 
         def add(item: dict, source: str, span: list[int]) -> None:
@@ -337,8 +337,8 @@ class Pipeline:
         top = candidates[0]["score"]
         if top < NOT_FOUND_HARD:
             return True
-        # главное существительное запроса должно встречаться в названиях кандидатов:
-        # «ноутбук игровой» ≠ «Стол игровой» (совпало прилагательное, а не товар)
+        # the head noun of the query must occur in candidate names:
+        # «ноутбук игровой» ≠ «Стол игровой» (an adjective matched, not the product)
         noun = main_noun(head)
         query = [noun] if noun else [l for l in _lemmas(head) if l not in GENERIC and len(l) > 2 and l.isalpha()]
         names = {l for c in candidates[:10] for l in _lemmas(c["name"])}
@@ -349,6 +349,6 @@ class Pipeline:
     def _public(f: dict) -> dict:
         out = {k: f[k] for k in PUBLIC_CHAR_FIELDS if k in f}
         out["confidence"] = round(f["score"] / 100, 2)
-        # происхождение (иерархия источников): КТРУ → Портал → новая; answer — выбрано пользователем из вариантов КТРУ
+        # origin (source hierarchy): KTRU → portal → new; answer — chosen by the user from KTRU options
         out["origin"] = f.get("origin") or ("answer" if f["method"] == "answer" else "ktru")
         return out

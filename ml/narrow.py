@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-"""Поэтапное сужение кандидатов КТРУ до одного кода.
+"""Step-by-step narrowing of KTRU candidates down to one code.
 
-1. Наименование: если текст полностью содержит название позиции («стул ученический»),
-   остаются только позиции с таким названием.
-2. Каждая найденная характеристика оставляет кандидатов, у которых она есть и значение допустимо.
-   Если характеристика противоречит всем оставшимся — она пропускается с ошибкой «конфликт».
-3. Остался один код — готово. Иначе следующий вопрос:
-   - разные наименования → «какой именно товар»;
-   - одно наименование → характеристика, ответ на которую в среднем оставляет меньше всего кодов;
-   - позиции не различаются характеристиками → выбор кода из списка.
-Каждый шаг пишется в steps — фронт показывает, как сужается список.
+1. Name: if the text fully contains a position name («стул ученический»),
+      only positions with that name remain.
+2. Each found characteristic keeps the candidates where it exists and the value is allowed.
+      If a characteristic contradicts all remaining ones, it is skipped with a «conflict» error.
+3. One code left — done. Otherwise the next question:
+      - different names → «which product exactly»;
+      - one name → the characteristic whose answer leaves the fewest codes on average;
+      - positions do not differ by characteristics → choose a code from the list.
+Every step is written to steps — the frontend shows how the list narrows.
 """
 from ml.ktru import KtruStore, format_value
 from ml.text import main_noun, tokenize
@@ -35,12 +35,12 @@ def _options(ch: dict) -> list[str]:
 
 
 def _norm_options(ch: dict) -> set[str]:
-    """Варианты в нормальной форме: «Женская»/«Женское»/«Женский» → «женский»."""
+    """Options in normal form: «Женская»/«Женское»/«Женский» → «женский»."""
     return {" ".join(_lemmas(o)) for o in _options(ch)}
 
 
 def answer_to_characteristic(answer: dict, codes: list[str], store: KtruStore) -> dict:
-    """Ответ пользователя на вопрос («Наличие подлокотников» = «Да») → характеристика с кодами, где значение допустимо."""
+    """User answer to a question («Наличие подлокотников» = «Да») → a characteristic with the codes where the value is allowed."""
     name, value = answer["characteristic"], answer["value"]
     norm = " ".join(_lemmas(value))
     ok = [c for c in codes if (ch := _char(store, c, name)) and norm in _norm_options(ch)]
@@ -51,13 +51,13 @@ def answer_to_characteristic(answer: dict, codes: list[str], store: KtruStore) -
 
 def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore,
            query: str = "", answers: list[dict] | None = None) -> tuple[list[dict], dict | None, list[dict], list[dict]]:
-    """→ (оставшиеся кандидаты, следующий шаг или None, история шагов, ошибки)."""
+    """→ (remaining candidates, next step or None, step history, errors)."""
     answers = answers or []
     remaining = list(candidates)
     steps = [{"stage": "Поиск по описанию", "count": len(remaining)}]
     errors = []
 
-    # 1. наименование: ответ пользователя или полное совпадение с текстом
+    # 1. name: a user answer or a full match with the text
     product = next((a["value"] for a in answers if a.get("type") == "product"), None)
     if product:
         remaining = [c for c in remaining if c["name"] == product] or remaining
@@ -68,16 +68,16 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
         covered = [n for n in names if (nl := _lemmas(n)) and all(any(_eq(w, x) for x in q) for w in nl)]
         noun = main_noun(query)
         if covered:
-            longest = max(len(_lemmas(n)) for n in covered)  # «Стул ученический», а не просто «Стул»
+            longest = max(len(_lemmas(n)) for n in covered)  # «Стул ученический», not just «Стул»
             keep = {n for n in covered if len(_lemmas(n)) == longest}
             stage = "Наименование: " + ", ".join(f"«{n}»" for n in sorted(keep))
-        elif noun:  # «стул» → только позиции, в названии которых есть «стул»
+        elif noun:  # «стул» → only positions whose name contains «стул»
             keep = {n for n in names if any(_eq(noun, w) for w in _lemmas(n))}
             stage = f"Наименование содержит «{noun}»"
         else:
             keep = names
         if keep and keep != names or covered or (noun and keep):
-            # шаг пишем и без сокращения: он подтверждает, что товар определён по наименованию
+            # the step is written even without narrowing: it confirms the product was determined by name
             remaining = [c for c in remaining if c["name"] in keep]
             steps.append({"stage": stage, "count": len(remaining)})
 
@@ -93,7 +93,7 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
             continue
         has = [c for c in remaining if _char(store, c["code"], f["name"])]
         if not has:
-            continue  # ни у кого из оставшихся нет такой характеристики — не сужает
+            continue  # none of the remaining has this characteristic — does not narrow
         ok = [c for c in has if c["code"] in f["codes"]]
         lacking = [c for c in remaining if c not in has]
         label = f"{f['name']} = {f['value']}" + (f" {f['unit']}" if f.get("unit") else "")
@@ -111,7 +111,7 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
         remaining = new_remaining
         steps.append({"stage": label, "count": len(remaining)})
 
-    # 3. результат или следующий вопрос
+    # 3. result or the next question
     if len(remaining) <= 1:
         return remaining, None, steps, errors
 
@@ -157,7 +157,7 @@ def missing_required(remaining: list[dict], characteristics: list[dict], store: 
 
 
 def _best_question(remaining: list[dict], filled: set, store: KtruStore):
-    """Характеристика, ответ на которую в среднем оставляет меньше всего кодов."""
+    """The characteristic whose answer leaves the fewest codes on average."""
     n = len(remaining)
     per_char: dict[str, dict] = {}
     for c in remaining:
@@ -169,9 +169,9 @@ def _best_question(remaining: list[dict], filled: set, store: KtruStore):
             for o in _options(ch):
                 d.setdefault("label", {}).setdefault(" ".join(_lemmas(o)), o)
             d["required"] |= ch["required"]
-            for i, v in enumerate(ch["values"]):  # порядок вариантов как в КТРУ (числа — по возрастанию)
+            for i, v in enumerate(ch["values"]):  # option order as in KTRU (numbers ascending)
                 label = format_value(v, ch["unit"])
-                # числа — по возрастанию, текст — по алфавиту
+                # numbers ascending, text alphabetically
                 d["order"].setdefault(" ".join(_lemmas(label)),
                                       (0, 0, label) if "text" in v else (v.get("min", v.get("max", 0)) or 0, i, ""))
 
@@ -180,10 +180,10 @@ def _best_question(remaining: list[dict], filled: set, store: KtruStore):
         options = set().union(*d["codes"].values())
         if len(options) < 2:
             continue
-        missing = n - len(d["codes"])  # у кого характеристики нет — остаются при любом ответе
+        missing = n - len(d["codes"])  # positions without the characteristic stay for any answer
         expected = sum(sum(o in vals for vals in d["codes"].values()) + missing for o in options) / len(options)
         if expected >= n:
-            continue  # любой ответ оставляет всех — вопрос бесполезен
+            continue  # every answer keeps everyone — the question is useless
         key = (expected, not d["required"], len(options))
         if best_key is None or key < best_key:
             ordered = [d["label"][o] for o in sorted(options, key=lambda o: d["order"][o])]

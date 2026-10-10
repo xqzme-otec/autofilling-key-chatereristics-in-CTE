@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Загрузка справочника КТРУ: data/processed/ktru.parquet (парсер ml/data/) или JSON временных данных."""
+"""KTRU reference loader: data/processed/ktru.parquet (the ml/data/ parser) or a JSON file with mock data."""
 import json
 from collections import Counter
 from pathlib import Path
@@ -21,7 +21,7 @@ def _num(x) -> float | int | None:
 
 
 def _convert_char(c: dict) -> dict | None:
-    """Характеристика из формата парсера ml/data → {name, required, unit, values}."""
+    """A characteristic in the ml/data parser format → {name, required, unit, values}."""
     values, unit = [], None
     for v in c["values"]:
         unit = unit or v.get("okei_name")
@@ -49,9 +49,9 @@ def _convert_char(c: dict) -> dict | None:
 
 
 def load_parquet(path: Path, active_only: bool = True, skip_templates: bool = True) -> list[dict]:
-    """Читает data/processed/ktru.parquet (результат scripts/prepare_ktru_dataset.py).
+    """Reads data/processed/ktru.parquet (the output of scripts/prepare_ktru_dataset.py).
 
-    Шаблоны (is_template) — родительские позиции, а не конечные коды; TERMINATED — недействующие.
+    Templates (is_template) are parent positions, not final codes; TERMINATED positions are no longer valid.
     """
     import pandas as pd
 
@@ -70,7 +70,7 @@ def load_parquet(path: Path, active_only: bool = True, skip_templates: bool = Tr
         items.append({
             "code": r.code,
             "name": (r.name or "").strip(),
-            # описание есть у единиц позиций, у остальных в parquet NaN (float) — берём только строки
+            # only a few positions have a description, the rest are NaN (float) in parquet — take strings only
             "description": r.nsi_description.strip() if isinstance(getattr(r, "nsi_description", None), str) else "",
             "okpd2": r.okpd2_code,
             "category": CATEGORY_RU.get(r.category, r.category),
@@ -114,7 +114,7 @@ class KtruStore:
         self.vocab = self._build_vocab()
 
     def passage(self, item: dict) -> str:
-        """Текст позиции для эмбеддингов: название + описание + названия характеристик."""
+        """Position text for embeddings: name + description + characteristic names."""
         parts = [f"Наименование: {item['name']}."]
         if item.get("description"):
             parts.append(f"Описание: {item['description']}.")
@@ -124,7 +124,7 @@ class KtruStore:
         return " ".join(parts)
 
     def _build_vocab(self) -> Counter:
-        """Частоты слов КТРУ (словоформы и леммы) — словарь для исправления опечаток."""
+        """KTRU word frequencies (word forms and lemmas) — the dictionary for typo correction."""
         vocab = Counter()
         for it in self.items:
             texts = [it["name"]]

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-"""Числа и единицы измерения → числовые характеристики КТРУ.
+"""Numbers and units → numeric KTRU characteristics.
 
-«высота 110 см» → «Высота: 1000–1200 Миллиметр» (110 см = 1100 мм попадает в диапазон).
+«высота 110 см» → «Высота: 1000–1200 Миллиметр» (110 cm = 1100 mm falls into the range).
 
-1. Находим числа: «110 см», «0,5кг», «52-54», «от 100 до 200 мм», «3 полки».
-2. Определяем характеристику:
-   - по словам рядом с числом («высота 110», «массой 0.5 кг», «3 полки»);
-   - если слов нет — по единице, когда у кандидатов ровно одна характеристика такой
-     размерности («молоток 0.5 кг» → «Масса молотка»).
-3. Переводим в единицу КТРУ и ищем диапазон, в который попадает число.
-Ошибки: единица не подходит («длина 2 кг»), число вне всех допустимых диапазонов.
-Числа, которым нет места в КТРУ у найденных товаров («стол письменный высотой 75 см» — у позиции
-нет характеристики высоты), возвращаются отдельно: их сохраняет иерархия источников (Портал / новая).
+1. Find numbers: «110 см», «0,5кг», «52-54», «от 100 до 200 мм», «3 полки».
+2. Pick the characteristic:
+      - by the words next to the number («высота 110», «массой 0.5 кг», «3 полки»);
+      - without words — by the unit, when the candidates have exactly one characteristic of that
+          dimension («молоток 0.5 кг» → «Масса молотка»).
+3. Convert to the KTRU unit and find the range the number falls into.
+Errors: unit does not fit («длина 2 кг»), number outside all allowed ranges.
+Numbers that have no place in KTRU for the found products («стол письменный высотой 75 см» — the position
+has no height characteristic) are returned separately: the source hierarchy keeps them (portal / new).
 """
 import os
 import re
@@ -22,7 +22,7 @@ from ml.ktru import KtruStore, format_value, is_text_char
 from ml.numwords import find_number_words
 from ml.text import main_noun, pos, tokenize
 
-# единица КТРУ (ОКЕИ) → (размерность, множитель к базовой единице размерности)
+# KTRU unit (OKEI) → (dimension, factor to the base unit of the dimension)
 KTRU_UNITS = {
     "Миллиметр": ("length", 1), "Сантиметр": ("length", 10), "Метр": ("length", 1000),
     "Километр; тысяча метров": ("length", 1_000_000), "Дюйм (25,4 мм)": ("length", 25.4),
@@ -32,7 +32,7 @@ KTRU_UNITS = {
     "Градус Цельсия": ("temp", 1), "Квадратный миллиметр": ("area", 1), "Минута": ("time", 1),
 }
 
-# как единицу пишут пользователи → (размерность, множитель)
+# how users write units → (dimension, factor)
 USER_UNITS = {
     "мм": ("length", 1), "миллиметр": ("length", 1), "см": ("length", 10), "сантиметр": ("length", 10),
     "дм": ("length", 100), "м": ("length", 1000), "метр": ("length", 1000), "км": ("length", 1_000_000),
@@ -46,7 +46,7 @@ USER_UNITS = {
     "об/мин": ("rpm", 1), "шт": ("count", 1), "штука": ("count", 1),
     "°c": ("temp", 1), "°с": ("temp", 1), "градус": ("temp", 1), "мм2": ("area", 1),
 }
-# полные слова пишутся с окончаниями («сантиметров», «килограмма»), сокращения — без
+# full words come with endings («сантиметров», «килограмма»), abbreviations without
 UNIT_WORDS = ["миллиметр", "сантиметр", "метр", "дюйм", "миллиграмм", "микрограмм", "килограмм", "грамм", "тонн",
               "киловатт", "ватт",
               "вольт", "штук", "градус"]
@@ -66,8 +66,8 @@ DIMENSION_WORDS = {"mass": ("масса", "вес"), "power": ("мощность
                    "charge": ("емкость",), "rpm": ("частота", "оборот", "скорость")}
 DIMENSION_NAMES = {"mass": "Масса", "power": "Мощность", "voltage": "Напряжение", "charge": "Емкость аккумулятора",
                    "rpm": "Частота вращения", "length": "Размер", "temp": "Температура", "count": "Количество"}
-# значение в открытом диапазоне КТРУ («≥ 100 Сантиметр»), которое дальше самой крайней границы
-# в столько раз, считаем подозрительным: «стол высотой 5 метров», «молоток 50 кг»
+# a value in an open KTRU range («≥ 100 Сантиметр») that is this many times beyond the outermost bound
+# is considered suspicious: «стол высотой 5 метров», «молоток 50 кг»
 SUSPICIOUS_FACTOR = 3
 
 
@@ -112,7 +112,7 @@ def contains_range(v: dict, lo: float, hi: float) -> bool:
 
 
 def _inside_code(text: str, start: int, end: int, has_unit: bool) -> bool:
-    """Число — часть кода модели/артикула: вплотную к буквам, дефисам, слэшам («П-30-950», «2930-H5», «HR2450FT»)."""
+    """The number is part of a model/article code: glued to letters, dashes, slashes («П-30-950», «2930-H5», «HR2450FT»)."""
     before = text[start - 1] if start > 0 else " "
     after = text[end] if end < len(text) else " "
     return before.isalpha() or before in "-/_" or after in "-/_" or (after.isalpha() and not has_unit)
@@ -265,7 +265,7 @@ class NumberMatcher:
         self.store = store
 
     def _num_chars(self, codes: list[str]) -> dict[str, dict]:
-        """Числовые характеристики кандидатов: имя → {unit, keys, by_code: {код: values}}."""
+        """Numeric characteristics of the candidates: name → {unit, keys, by_code: {code: values}}."""
         chars: dict[str, dict] = {}
         for code in codes:
             item = self.store.by_code[code]
@@ -424,8 +424,8 @@ class NumberMatcher:
         return found, errors, unmatched, reserved
 
     def match(self, text: str, codes: list[str], skip: list[list[int]] = ()) -> tuple[list[dict], list[dict], list[list[int]], list[dict]]:
-        """→ (характеристики, ошибки, спаны слов, занятых числами — их не берут текстовые характеристики,
-        числа без места в КТРУ у этих товаров — для Портала / новых характеристик).
+        """→ (characteristics, errors, spans of words taken by numbers — text characteristics do not use them,
+        numbers without a place in KTRU for these products — for portal / new characteristics).
         skip — spans already taken by another matcher (clothing sizes)."""
         chars = self._num_chars(codes)
         rank = {c: i for i, c in enumerate(codes)}
@@ -474,7 +474,7 @@ class NumberMatcher:
             source = text[m["start"]:m["end"]].strip()
             span = [m["start"], m["start"] + len(source)]
             if unit is None and (m["digits"] >= 5 or _inside_code(text, m["start"], m["end"], False)):
-                continue  # «RUKO 108225», «П-30-950» — артикул или модель, а не значение
+                continue  # «RUKO 108225», «П-30-950» — an article or a model, not a value
             number_spans = [t["span"] for t in tokens if span[0] <= t["span"][0] and t["span"][1] <= span[1]]
             keyword_tok = next((t for t in reversed(ctx_tokens) if t["span"][1] <= m["start"]
                                 and t["lemma"] not in product_words and pos(t["text"]) == "NOUN"), None)
@@ -509,7 +509,7 @@ class NumberMatcher:
             if named:
                 keys = {k for x in options for k in x[2]["keys"]}
                 reserved += [t["span"] for t in ctx_tokens if self._key_score([t["lemma"]], list(keys))]
-            # среди подходящих по словам — совместимые по единице
+            # among the keyword matches — the ones compatible by unit
             compatible = [x for x in options if unit is None or KTRU_UNITS.get(x[2]["unit"], (None,))[0] == unit[0]]
             if not compatible:
                 name, info = options[0][1], options[0][2]
@@ -526,7 +526,7 @@ class NumberMatcher:
                 found.append(entry)
             if err:
                 errors.append(err)
-        # одна характеристика — одно значение (первое упоминание)
+        # one characteristic — one value (the first mention)
         uniq = {}
         for f in found:
             uniq.setdefault(f["name"], f)
@@ -540,7 +540,7 @@ class NumberMatcher:
             conv = (lambda x: round(x * unit[1] / factor, 9)) if unit and dim == unit[0] else (lambda x: x)
             xa = conv(a)
             xb = conv(b) if b is not None else None
-            # для диапазона «52-54» значение должно покрывать обе границы
+            # for a range «52-54» the value must cover both bounds
             hit = next((v for v in values if (contains(v, xa) if xb is None else contains_range(v, xa, xb))), None)
             if hit:
                 codes.append(code)
@@ -560,7 +560,7 @@ class NumberMatcher:
 
 
 def _suspicious(name, hit, values, hi_x, lo_x, unit, source, span) -> dict | None:
-    """Значение формально попало в открытый диапазон КТРУ, но слишком далеко от его границы."""
+    """The value formally fits an open KTRU range but is too far from its bound."""
     bounds = [b for v in values for b in (v.get("min"), v.get("max")) if b is not None]
     if not bounds:
         return None
