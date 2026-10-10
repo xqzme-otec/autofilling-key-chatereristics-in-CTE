@@ -12,9 +12,15 @@ type AnalysisResult struct {
 	Characteristics []Characteristic `json:"characteristics"`
 	Candidates      []Candidate      `json:"candidates"`
 	CandidatesTotal int              `json:"candidates_total"`
+	RetrievalCount  *int             `json:"retrieval_count,omitempty"`
+	CompatibleCount *int             `json:"compatible_count,omitempty"`
+	RemainingCount  *int             `json:"remaining_count,omitempty"`
+	ProductIntent   *string          `json:"product_intent,omitempty"`
+	SubtypeContext  []ContextSignal  `json:"subtype_context,omitempty"`
 	Errors          []AnalysisError  `json:"errors"`
 	MissingRequired []string         `json:"missing_required"` // required KTRU characteristics the text lacks
 	NextStep        *NextStep        `json:"next_step"`
+	NextQuestion    *NextStep        `json:"next_question,omitempty"`
 	Ktru            *string          `json:"ktru"`
 	KtruName        *string          `json:"ktru_name"`
 	Steps           []Step           `json:"steps"`
@@ -27,12 +33,23 @@ type Correction struct {
 }
 
 type Characteristic struct {
-	Name       string   `json:"name"`
-	Value      string   `json:"value"`
-	Unit       *string  `json:"unit,omitempty"`
-	Source     *string  `json:"source,omitempty"`
-	Origin     string   `json:"origin"`     // ktru, portal, new or answer: the source hierarchy
-	Confidence *float64 `json:"confidence"` // 0..1
+	Name             string   `json:"name"`
+	Value            string   `json:"value"`
+	Unit             *string  `json:"unit,omitempty"`
+	Source           *string  `json:"source,omitempty"`
+	Origin           string   `json:"origin"`     // ktru, portal, new or answer: the source hierarchy
+	Confidence       *float64 `json:"confidence"` // 0..1
+	UserText         *string  `json:"user_text,omitempty"`
+	UsedForNarrowing *bool    `json:"used_for_narrowing,omitempty"`
+	UsedForReranking *bool    `json:"used_for_reranking,omitempty"`
+}
+
+type ContextSignal struct {
+	Value            string `json:"value"`
+	Source           string `json:"source"`
+	UserText         string `json:"user_text"`
+	UsedForNarrowing bool   `json:"used_for_narrowing"`
+	UsedForReranking bool   `json:"used_for_reranking"`
 }
 
 type Candidate struct {
