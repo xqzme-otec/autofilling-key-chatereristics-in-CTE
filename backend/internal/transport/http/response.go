@@ -15,9 +15,15 @@ type sessionResponse struct {
 	SessionID       string                  `json:"session_id"`
 	Corrections     []domain.Correction     `json:"corrections"`
 	Characteristics []domain.Characteristic `json:"characteristics"`
+	ProductIntent   *string                 `json:"product_intent,omitempty"`
+	SubtypeContext  []domain.ContextSignal  `json:"subtype_context,omitempty"`
+	RetrievalCount  *int                    `json:"retrieval_count,omitempty"`
+	CompatibleCount *int                    `json:"compatible_count,omitempty"`
+	RemainingCount  *int                    `json:"remaining_count,omitempty"`
 	Candidates      []domain.Candidate      `json:"candidates"`
 	Errors          []domain.AnalysisError  `json:"errors"`
 	NextStep        *nextStepResponse       `json:"next_step"`
+	NextQuestion    *nextStepResponse       `json:"next_question,omitempty"`
 	Ktru            *string                 `json:"ktru"`
 	KtruName        *string                 `json:"ktru_name"`
 	Steps           []domain.Step           `json:"steps"`
@@ -35,6 +41,11 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 		SessionID:       s.ID,
 		Corrections:     nonNil(r.Corrections),
 		Characteristics: nonNil(r.Characteristics),
+		ProductIntent:   r.ProductIntent,
+		SubtypeContext:  r.SubtypeContext,
+		RetrievalCount:  r.RetrievalCount,
+		CompatibleCount: r.CompatibleCount,
+		RemainingCount:  r.RemainingCount,
 		Candidates:      nonNil(r.Candidates),
 		Errors:          nonNil(r.Errors),
 		Ktru:            r.Ktru,
@@ -43,6 +54,9 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 	}
 	if q := r.NextStep; q != nil {
 		out.NextStep = &nextStepResponse{Message: *q.Message, Characteristic: q.Characteristic, Options: q.Options}
+	}
+	if q := r.NextQuestion; q != nil {
+		out.NextQuestion = &nextStepResponse{Message: *q.Message, Characteristic: q.Characteristic, Options: q.Options}
 	}
 	return out
 }

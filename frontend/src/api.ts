@@ -9,6 +9,17 @@ export interface Characteristic {
   value: string
   unit?: string | null
   source?: string | null
+  user_text?: string | null
+  used_for_narrowing?: boolean
+  used_for_reranking?: boolean
+}
+
+export interface ContextSignal {
+  value: string
+  source: string
+  user_text: string
+  used_for_narrowing: boolean
+  used_for_reranking: boolean
 }
 
 export interface Candidate {
@@ -32,11 +43,17 @@ export interface NextStep {
 
 export interface AnalysisResult {
   session_id: string
+  product_intent: string | null
+  subtype_context: ContextSignal[]
+  retrieval_count: number
+  compatible_count: number
+  remaining_count: number
   corrections: Correction[]
   characteristics: Characteristic[]
   candidates: Candidate[]
   errors: AnalysisError[]
   next_step: NextStep | null
+  next_question?: NextStep | null
   ktru: string | null
   ktru_name: string | null
   steps: { stage: string; count: number }[]
