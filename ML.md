@@ -120,6 +120,102 @@ r = p.analyze({
 - `next_step.type`: `product` (выбрать товар), `characteristic` (указать характеристику), `code` (позиции не различаются — выбрать код); `null`, когда код определён или товар не найден.
 - `method` у характеристики — как найдено: `exact`, `stem`, `fuzzy`, `synonym`, `alias`, `negation`, `keyword`, `number`, `embedding`, `name` (повторяет название товара), `answer` (ответ пользователя), `portal`, `new`.
 
+## HTTP-сервис модели (`ml/service/`)
+
+Тонкая HTTP-обёртка над `Pipeline.analyze()` для агрегатора (контракт — `docs/api.md`, раздел 4, ветка
+`aggregator-service`). Состояния не хранит: в каждый вызов приходят весь текст и все ответы.
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| `POST` | `/analyze` | тело `{"raw": str, "answers": [...], "tokens"?: [...]}` → результат `Pipeline.analyze()` как есть (формат выше) |
+| `GET` | `/health` | процесс жив: `200 {"status": "ok", "pipeline": "loading" \| "ready" \| "failed"}` |
+| `GET` | `/ready` | пайплайн загружен: `200 {"status": "ready", "load_seconds": …}`, иначе `503` (`loading` / `failed` + `error`) |
+
+Пайплайн (модель + индекс КТРУ) загружается один раз при старте в фоновом потоке (~5–10 с), `/health` отвечает
+сразу; пока пайплайн не готов, `/analyze` отдаёт `503 model_not_ready`.
+
+**Ошибки** — формат как у агрегатора, плюс `request_id`:
+`{"error": {"code": "...", "message": "...", "request_id": "...", "details"?: [{"loc", "msg", "type"}]}}`.
+
+| HTTP | `code` | Когда |
+|---|---|---|
+| 422 | `validation_error` | не JSON, нет `raw`, `raw` не строка, `answers` не список, ответ без `value` или без `characteristic` при `type=characteristic`, неизвестный `type` |
+| 422 | `text_too_long` / `too_many_answers` | `raw` длиннее `MAX_TEXT_LENGTH` символов / ответов больше `MAX_ANSWERS` |
+| 413 | `payload_too_large` | `Content-Length` больше `MAX_BODY_BYTES` |
+| 503 | `model_not_ready` | пайплайн ещё грузится или не загрузился |
+| 500 | `internal_error` | необработанная ошибка; traceback только в логе, клиент получает короткое сообщение и `request_id` |
+
+Пустой или из одних пробелов `raw` — не ошибка запроса: пайплайн вернёт результат без кода (агрегатор такие тексты
+отсекает сам). Неизвестные поля тела игнорируются, `answers: null` = `[]`.
+
+**Параллельные запросы.** `Pipeline.analyze()` не потокобезопасен (состояние вызова хранится в общих объектах,
+например `ValueMatcher.last_consumed`; на Mac параллельный вызов модели на MPS роняет процесс). Поэтому вызовы
+выполняются в пуле потоков (event loop не блокируется, `/health` отвечает всегда) и сериализуются блокировкой:
+один процесс обрабатывает один `analyze` за раз, остальные ждут (`queued_ms` в логе). Масштабировать — числом
+процессов/контейнеров, а не потоков.
+
+**Логи** (stdout, формат из `AGENTS.md`): на каждый запрос строка `ml.service.access` — метод, путь, статус, мс;
+для `/analyze` — строка `analyze:` с длиной текста, числом кандидатов после поиска и после сужения, кодом КТРУ,
+числом характеристик и ошибок, типами ошибок, `queued_ms`, `pipeline_ms`. `request_id` берётся из заголовка
+`X-Request-ID` (символы `A-Za-z0-9._:-`, до 128) или генерируется, возвращается в заголовке ответа и пишется во все
+строки лога этого запроса. Полный текст описания — только на `DEBUG`.
+
+**Переменные окружения**
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `HOST` / `PORT` | `0.0.0.0` / `8001` | адрес сервиса |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `KTRU_PATH` | `data/processed/ktru.parquet` | другой файл справочника |
+| `MAX_TEXT_LENGTH` | `5000` | максимум символов в `raw` (у агрегатора 2000) |
+| `MAX_ANSWERS` | `100` | максимум ответов в `answers` |
+| `MAX_BODY_BYTES` | `262144` | максимум размера тела запроса |
+| `OMP_NUM_THREADS` | в Docker `4` | потоки torch; без ограничения в контейнере p50 растёт с ~12 до ~106 мс |
+
+Неверное значение переменной — сервис не стартует (код выхода 2, причина в логе).
+
+### Запуск локально
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m ml.service                     # http://localhost:8001
+curl -s localhost:8001/ready
+curl -s -X POST localhost:8001/analyze -H 'Content-Type: application/json' -H 'X-Request-ID: demo-1' \
+     -d '{"raw": "стол письменный", "answers": []}'
+curl -s -X POST localhost:8001/analyze -H 'Content-Type: application/json' \
+     -d '{"raw": "стол письменный", "answers": [{"type": "characteristic", "characteristic": "Тип каркаса", "value": "Деревянный"}]}'
+```
+
+Второй запрос (ответ на `next_step` первого) возвращает `"ktru": "31.01.10.000-00000004"`.
+
+### Запуск в Docker
+
+```bash
+docker build -f ml/Dockerfile -t ktru-model .      # из корня репозитория; ~3 ГБ (CPU-torch + модель)
+docker run --rm -p 8001:8001 ktru-model
+# со словарём Портала (в образ не входит — данные организаторов):
+docker run --rm -p 8001:8001 \
+  -v "$PWD/data/processed/portal_characteristics.json:/app/data/processed/portal_characteristics.json:ro" ktru-model
+```
+
+Модель `intfloat/multilingual-e5-small` скачивается при сборке и лежит в образе, эмбеддинги КТРУ считаются при сборке
+(`data/cache`), поэтому контейнер стартует без сети (`HF_HUB_OFFLINE=1`) за ~5 с. Пользователь в контейнере
+не root, `HEALTHCHECK` — по `/ready` (контейнер `healthy`, только когда пайплайн загружен).
+
+### Тесты сервиса
+
+```bash
+.venv/bin/python -m pytest -q tests/test_service.py              # быстрые, с фейковым пайплайном (~1 с)
+.venv/bin/python -m pytest -q tests/test_service_integration.py  # с настоящим Pipeline (~10 с)
+.venv/bin/python -m pytest -q -m "not integration"               # всё, кроме тестов с настоящей моделью
+```
+
+Интеграционные тесты проверяют и совместимость ответа с агрегатором: обязательные поля и типы, которые требует
+`backend/internal/client/model/client.go` и `domain.AnalysisResult` в Go.
+
+Замеры (Mac на Apple Silicon, 30 запросов по 6 разным текстам): локально p50 9.5 мс, p95 13.2 мс; в Docker (CPU, 4 потока)
+p50 11.8 мс, p95 14.1 мс; при 10 одновременных клиентах ~44 запроса/с в Docker, ~114 запросов/с локально.
+
 ## Проверка
 
 ```bash

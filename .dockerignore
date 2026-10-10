@@ -1,0 +1,19 @@
+# build context for ml/Dockerfile: only code and the KTRU dataset are needed
+.git
+.idea
+.venv
+**/__pycache__
+**/.pytest_cache
+data/raw
+data/cache
+data/processed/*
+!data/processed/ktru.parquet
+eval
+frontend
+backend
+tests
+docs
+*.pdf
+*.docx
+*.xlsx
+.env
