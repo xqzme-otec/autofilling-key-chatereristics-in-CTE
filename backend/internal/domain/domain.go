@@ -12,8 +12,14 @@ type AnalysisResult struct {
 	Characteristics []Characteristic `json:"characteristics"`
 	Candidates      []Candidate      `json:"candidates"`
 	CandidatesTotal int              `json:"candidates_total"`
+	RetrievalCount  *int             `json:"retrieval_count,omitempty"`
+	CompatibleCount *int             `json:"compatible_count,omitempty"`
+	RemainingCount  *int             `json:"remaining_count,omitempty"`
+	ProductIntent   *string          `json:"product_intent,omitempty"`
+	SubtypeContext  []ContextSignal  `json:"subtype_context,omitempty"`
 	Errors          []AnalysisError  `json:"errors"`
 	NextStep        *NextStep        `json:"next_step"`
+	NextQuestion    *NextStep        `json:"next_question,omitempty"`
 	Ktru            *string          `json:"ktru"`
 	KtruName        *string          `json:"ktru_name"`
 	Steps           []Step           `json:"steps"`
@@ -26,10 +32,21 @@ type Correction struct {
 }
 
 type Characteristic struct {
-	Name   string  `json:"name"`
-	Value  string  `json:"value"`
-	Unit   *string `json:"unit,omitempty"`
-	Source *string `json:"source,omitempty"`
+	Name             string  `json:"name"`
+	Value            string  `json:"value"`
+	Unit             *string `json:"unit,omitempty"`
+	Source           *string `json:"source,omitempty"`
+	UserText         *string `json:"user_text,omitempty"`
+	UsedForNarrowing *bool   `json:"used_for_narrowing,omitempty"`
+	UsedForReranking *bool   `json:"used_for_reranking,omitempty"`
+}
+
+type ContextSignal struct {
+	Value            string `json:"value"`
+	Source           string `json:"source"`
+	UserText         string `json:"user_text"`
+	UsedForNarrowing bool   `json:"used_for_narrowing"`
+	UsedForReranking bool   `json:"used_for_reranking"`
 }
 
 type Candidate struct {

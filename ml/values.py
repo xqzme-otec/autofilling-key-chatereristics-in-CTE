@@ -324,7 +324,7 @@ class ValueMatcher:
                 if prev is None or score > prev["score"]:
                     src, span = seg.source(used)
                     codes_ok = set(info.values[value])
-                    if method == "partial":  # «стекло» fits «Стекло закаленное» and «Стекло тонированное» alike
+                    if method in ("partial", "stem"):  # broad material fits its qualified KTRU values
                         head = info.value_lemmas[value].split()[0]
                         codes_ok = set().union(*(info.values[v] for v, vl in info.value_lemmas.items()
                                                  if _stem_eq(vl.split()[0], head)))
