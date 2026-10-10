@@ -1,25 +1,32 @@
 import { useEffect, useRef, useState } from "react"
+import type { ReactNode } from "react"
 import { analyze, answerQuestion, ApiError, type AnalysisResult } from "./api"
 import { examples } from "./data"
 import { Button, Card, Icon, NotificationBar, Spinner, Status } from "./ui"
 
+const PORTAL_URL = "https://zakupki.mos.ru/"
+
+function PortalLink({ children, className, label }: { children: ReactNode; className?: string; label?: string }) {
+  return <a aria-label={label} className={className} href={PORTAL_URL} rel="noreferrer" target="_blank">{children}</a>
+}
+
 function Header() {
   return <header className="header"><div className="header__inner">
-    <div aria-label="Портал поставщиков" className="logo">
+    <PortalLink className="logo" label="Открыть Портал поставщиков">
       <svg aria-hidden="true" height="34" viewBox="0 0 34 34" width="34"><rect fill="#A3A3A3" height="24" width="24" x="0" y="10" /><rect fill="#DB2B21" height="24" width="24" x="8" y="0" /><rect fill="#FFFFFF" height="10" width="10" x="15" y="7" /></svg>
       <span><b>Портал</b><i>Поставщиков</i></span>
-    </div>
+    </PortalLink>
     <div className="header__navigation" aria-label="Элементы шапки Портала">
-      <span className="header__item header__menu"><Icon name="menu" size={19} /><span>Меню</span></span>
-      <span className="header__item header__support"><Icon name="bulb" size={19} /><span>Центр поддержки</span></span>
-      <span className="header__item header__cart"><Icon name="cart" size={19} /><span>Корзина</span></span>
-      <span className="header__item header__region"><Icon name="pin" size={19} /><span>Регион</span></span>
+      <PortalLink className="header__item header__menu"><Icon name="menu" size={19} /><span>Меню</span></PortalLink>
+      <PortalLink className="header__item header__support"><Icon name="bulb" size={19} /><span>Центр поддержки</span></PortalLink>
+      <PortalLink className="header__item header__cart"><Icon name="cart" size={19} /><span>Корзина</span></PortalLink>
+      <PortalLink className="header__item header__region"><Icon name="pin" size={19} /><span>Регион</span></PortalLink>
     </div>
     <div className="header__account" aria-label="Элементы учётной записи">
-      <span className="header__search" aria-label="Поиск"><Icon name="search" size={19} /></span>
+      <PortalLink className="header__search" label="Поиск на Портале"><Icon name="search" size={19} /></PortalLink>
       <span className="header__language" aria-label="Русский язык"><span className="header__flag" /><Icon name="chevronDown" size={12} /></span>
-      <span className="header__login">Войти</span>
-      <span className="header__register">Зарегистрироваться</span>
+      <PortalLink className="header__login">Войти</PortalLink>
+      <PortalLink className="header__register">Зарегистрироваться</PortalLink>
     </div>
   </div></header>
 }
@@ -41,50 +48,47 @@ function Footer() {
   return <footer className="footer"><div className="footer__inner">
     <div className="footer__main">
       <nav aria-label="Разделы Портала" className="footer__links">
-        <span>О портале</span><span>Поставщикам</span><span>Новости</span><span>Контакты</span><span>Карта сайта</span>
+        <PortalLink>О портале</PortalLink><PortalLink>Поставщикам</PortalLink><PortalLink>Покупателям</PortalLink><PortalLink>Новости</PortalLink><PortalLink>Контакты</PortalLink><PortalLink>Карта сайта</PortalLink>
       </nav>
       <p>© 2026 Портал поставщиков<br />Характеристики и подбор КТРУ</p>
     </div>
     <div className="footer__side">
-      <div className="footer__help"><span><Icon name="headset" size={17} /> Служба качества</span><span><Icon name="info" size={17} /> Написать в службу поддержки</span></div>
+      <div className="footer__help"><PortalLink><Icon name="headset" size={17} /> Служба качества</PortalLink><PortalLink><Icon name="info" size={17} /> Написать в службу поддержки</PortalLink></div>
       <div aria-label="Социальные сети Портала" className="footer__social"><SocialIcon name="facebook" /><SocialIcon name="twitter" /><SocialIcon name="instagram" /><SocialIcon name="vk" /><SocialIcon name="youtube" /></div>
     </div>
   </div></footer>
 }
 
-function PageHead({ finished }: { finished: boolean }) {
+function PageHead() {
   return <div className="page-head">
-    <nav aria-label="Хлебные крошки" className="crumbs"><span>Каталог продукции</span><Icon name="chevronRight" size={14} /><span>Создание СТЕ</span><Icon name="chevronRight" size={14} /><span aria-current="page">Характеристики</span></nav>
-    <div className="page-head__row"><div><h1>Заполнение характеристик товара</h1><p>Опишите товар — система подберёт характеристики и поможет определить код КТРУ.</p></div>
-      <div className="page-head__aside"><ol aria-label="Этапы создания СТЕ" className="steps">
-        <li className="is-done"><span><Icon name="check" size={14} /></span>Описание</li>
-        <li className={finished ? "is-done" : "is-current"}><span>{finished ? <Icon name="check" size={14} /> : 2}</span>Характеристики</li>
-        <li className={finished ? "is-current" : ""}><span>3</span>Результат</li>
-      </ol></div>
-    </div>
+    <h1>Поиск характеристик и кода КТРУ</h1>
+    <p>Введите описание товара или закупочной потребности.</p>
   </div>
 }
 
-function DescriptionCard({ description, onChange, onSubmit, loading }: { description: string; onChange: (value: string) => void; onSubmit: () => void; loading: boolean }) {
-  return <Card className="description">
-    <div className="card__head"><h2>Описание товара</h2><span className="hint">Назначение, параметры, материалы и особенности</span></div>
-    <label className="field-label" htmlFor="description">Описание товара</label>
-    <div className="textarea-wrap"><textarea id="description" maxLength={2000} onChange={(event) => onChange(event.target.value)} placeholder="Например: молоток слесарный, масса 500 грамм, длина рукоятки 25 см" rows={4} value={description} /><span className="textarea-count">{description.length} / 2000</span></div>
-    <div className="examples"><span>Примеры:</span>{examples.map((item) => <button className="chip" key={item.label} onClick={() => onChange(item.text)} type="button">{item.label}</button>)}</div>
-    <div className="description__actions"><Button disabled={!description.trim()} loading={loading} onClick={onSubmit} variant="primary">{loading ? "Обрабатываем описание" : "Подобрать характеристики"}</Button><Button disabled={!description || loading} onClick={() => onChange("")}>Очистить</Button></div>
-  </Card>
+function SearchForm({ description, onChange, onSubmit, loading }: { description: string; onChange: (value: string) => void; onSubmit: () => void; loading: boolean }) {
+  return <form className="search-form" onSubmit={(event) => { event.preventDefault(); onSubmit() }} role="search">
+    <label className="sr-only" htmlFor="description">Описание товара или закупочной потребности</label>
+    <div className="search-form__row">
+      <Icon name="search" size={22} />
+      <input autoComplete="off" id="description" maxLength={2000} onChange={(event) => onChange(event.target.value)} placeholder="Например: пальто для девочки, молоток слесарный или офисный стол" type="search" value={description} />
+      <Button disabled={!description.trim()} loading={loading} type="submit" variant="primary">{loading ? "Ищем" : "Найти"}</Button>
+    </div>
+    <div className="search-form__examples"><span>Примеры:</span>{examples.map((item) => <button className="chip" key={item.label} onClick={() => onChange(item.text)} type="button">{item.label}</button>)}</div>
+  </form>
 }
 
 function CharacteristicsCard({ result, loading }: { result: AnalysisResult | null; loading: boolean }) {
   if (loading) return <Card className="chars"><h2>Распознанные характеристики</h2><div className="api-loading"><Spinner /> Сопоставляем описание со справочником…</div></Card>
-  if (!result) return <Card className="empty-card"><div><h2>Распознанные характеристики</h2><p>Здесь появятся характеристики, извлечённые из описания товара.</p></div></Card>
+  if (!result) return null
   return <Card className="chars" id="characteristics">
     <div className="card__head"><h2>Распознанные характеристики</h2><span className="hint">Найдено: {result.characteristics.length}</span></div>
     {result.corrections.length > 0 && <section className="api-section"><h3>Исправления и нормализация</h3><ul className="api-list">{result.corrections.map((item, index) => <li key={`${item.from}-${index}`}><Icon name="check" size={16} /><span><s>{item.from}</s> → <strong>{item.to}</strong>{item.reason && <small>{item.reason}</small>}</span></li>)}</ul></section>}
+    {(result.product_intent || result.subtype_context?.length > 0) && <section className="api-section"><h3>Товар и контекст</h3><p>{result.product_intent && <>Товар: <strong>{result.product_intent}</strong></>}{result.subtype_context?.length > 0 && <> · Контекст: {result.subtype_context.map((signal) => signal.value).join(", ")}</>}</p></section>}
     {result.errors.length > 0 && <section className="api-section" aria-label="Ошибки в описании"><h3>Требует внимания</h3><ul className="api-list api-list--errors">{result.errors.map((item, index) => <li key={`${item.type}-${index}`}><Icon name="alert" size={16} /><span><strong>{item.characteristic || "Описание товара"}</strong>: {item.message}{item.suggestion && <small>Предложение: {item.suggestion}</small>}</span></li>)}</ul></section>}
     {result.characteristics.length > 0 ? <div aria-label="Распознанные характеристики" className="api-table" role="table">
       <div className="api-table__head" role="row"><span role="columnheader">Характеристика</span><span role="columnheader">Значение</span><span role="columnheader">Фрагмент описания</span></div>
-      {result.characteristics.map((item, index) => <div className="api-table__row" key={`${item.name}-${index}`} role="row"><strong role="cell">{item.name}</strong><span role="cell">{item.value}{item.unit ? ` ${item.unit}` : ""}</span><span className="api-table__source" role="cell">{item.source || "—"}</span></div>)}
+      {result.characteristics.map((item, index) => <div className="api-table__row" key={`${item.name}-${index}`} role="row"><strong role="cell">{item.name}</strong><span role="cell">{item.value}{item.unit ? ` ${item.unit}` : ""}</span><span className="api-table__source" role="cell">{({ ktru: "КТРУ", portal: "Портал", user: "Пользователь" } as Record<string, string>)[item.source || ""] || item.source || "—"}{item.user_text && <small>{item.user_text}</small>}</span></div>)}
     </div> : <p className="api-empty">Характеристики пока не найдены. Уточните описание и повторите поиск.</p>}
   </Card>
 }
@@ -98,15 +102,16 @@ function plural(count: number) {
 
 function KtruCard({ result, loading, selectedAnswer, onAnswer, onSubmitAnswer }: { result: AnalysisResult | null; loading: boolean; selectedAnswer: string; onAnswer: (value: string) => void; onSubmitAnswer: () => void }) {
   if (loading && !result) return <Card className="ktru"><div className="ktru-head"><h2>Подбор кода КТРУ</h2></div><div className="api-loading"><Spinner /> Ищем позиции…</div></Card>
-  if (!result) return <Card className="ktru"><div className="ktru-head"><h2>Подбор кода КТРУ</h2><Status tone="neutral">Ожидает данных</Status></div><div className="ktru-empty"><p>Подбор начнётся после анализа описания товара.</p></div></Card>
+  if (!result) return <Card className="ktru"><div className="ktru-head"><h2>Подбор кода КТРУ</h2><Status tone="neutral">Ожидает данных</Status></div><div className="ktru-empty"><p>Подбор начнётся после анализа описания.</p></div></Card>
   const complete = result.ktru !== null
-  const lastCount = result.steps.at(-1)?.count ?? result.candidates.length
+  const lastCount = result.remaining_count ?? result.steps.at(-1)?.count ?? result.candidates.length
   return <div className="api-side-stack"><Card className="ktru">
-    <div className="ktru-head"><div className="ktru-head__row"><h2>Подбор кода КТРУ</h2><Status tone={complete ? "success" : result.next_step ? "info" : "warning"}>{complete ? "Код определён" : result.next_step ? "Нужно уточнение" : "Нет результата"}</Status></div>{!complete && <p className="ktru-head__count">Осталось: <b>{lastCount}</b> {plural(lastCount)}</p>}</div>
+    <div className="ktru-head"><div className="ktru-head__row"><h2>Подбор кода КТРУ</h2><Status tone={complete ? "success" : result.next_step ? "info" : "warning"}>{complete ? "Код определён" : result.next_step ? "Нужно уточнение" : "Нет результата"}</Status></div>{!complete && <p className="ktru-head__count">Поиск: {result.retrieval_count ?? result.candidates.length} · По товару: {result.compatible_count ?? lastCount} · Осталось: <b>{lastCount}</b> {plural(lastCount)}</p>}</div>
     {result.steps.length > 0 && <ol aria-label="Сужение списка КТРУ" className="history">{result.steps.map((step, index) => <li className={index === result.steps.length - 1 ? "is-last" : ""} key={`${step.stage}-${index}`}><span className="history__dot" /><span className="history__label">{step.stage}</span><span className="history__count">{step.count}</span></li>)}</ol>}
     {complete && <div className="api-final"><span className="label-caps">Позиция КТРУ</span><h3>{result.ktru_name || "Товар"}</h3><strong className="api-code">{result.ktru}</strong></div>}
-    {!complete && !result.next_step && <p className="api-empty">Однозначный код не найден. Уточните описание товара и запустите подбор заново.</p>}
+    {!complete && !result.next_step && <p className="api-empty">Однозначный код не найден. Уточните описание и запустите подбор заново.</p>}
     {!complete && result.candidates.length > 0 && <div className="api-candidates"><h3>Подходящие позиции</h3><ul>{result.candidates.map((candidate) => <li key={candidate.code}><strong>{candidate.name}</strong><span>{candidate.code}</span>{candidate.score != null && <small>Совпадение: {Math.round(candidate.score * 100)}%</small>}</li>)}</ul></div>}
+
   </Card>
     {result.next_step && <Card className="question" id="question"><span className="label-caps label-caps--blue">Уточняющий вопрос</span><h3>{result.next_step.message}</h3>{result.next_step.characteristic && <p>Характеристика: {result.next_step.characteristic}</p>}
       <fieldset className="radios" disabled={loading}><legend className="sr-only">{result.next_step.message}</legend>{result.next_step.options.map((option) => <label className={`radio ${selectedAnswer === option ? "is-checked" : ""}`} key={option}><input checked={selectedAnswer === option} name="clarify" onChange={() => onAnswer(option)} type="radio" value={option} /><span className="radio__mark" />{option}</label>)}</fieldset>
@@ -160,8 +165,9 @@ export default function App() {
   const startAnalysis = () => { if (!description.trim()) return; setResult(null); setSelectedAnswer(""); void perform((signal) => analyze(description, signal)) }
   const submitAnswer = () => { if (!result?.next_step || !result.next_step.options.includes(selectedAnswer)) return; void perform((signal) => answerQuestion(result.session_id, selectedAnswer, signal)) }
 
-  return <div className="app"><Header /><main className="page"><PageHead finished={result?.ktru != null} />
+  return <div className="app"><Header /><main className="page"><PageHead />
+    <SearchForm description={description} loading={loading} onChange={changeDescription} onSubmit={startAnalysis} />
     {error && <div className="page-notice"><NotificationBar title="Не удалось выполнить запрос" tone="danger">{error}</NotificationBar></div>}
-    <div className="workspace"><div className="workspace__main"><DescriptionCard description={description} loading={loading} onChange={changeDescription} onSubmit={startAnalysis} /><CharacteristicsCard loading={loading && !result} result={result} /></div><aside className="workspace__side"><KtruCard loading={loading} onAnswer={setSelectedAnswer} onSubmitAnswer={submitAnswer} result={result} selectedAnswer={selectedAnswer} /></aside></div>
+    {(loading || result) && <div className="workspace"><div className="workspace__main"><CharacteristicsCard loading={loading && !result} result={result} /></div><aside className="workspace__side"><KtruCard loading={loading} onAnswer={setSelectedAnswer} onSubmitAnswer={submitAnswer} result={result} selectedAnswer={selectedAnswer} /></aside></div>}
   </main><Footer /></div>
 }
