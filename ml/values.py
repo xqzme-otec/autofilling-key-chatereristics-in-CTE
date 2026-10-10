@@ -218,7 +218,8 @@ class ValueMatcher:
                     continue
             head = vlem.split()[0]
             if n >= 2 and head not in PREPOSITIONS and len(head) >= 4:  # broader word for a specific value
-                head_hits = [i for i, l in enumerate(lemmas) if _stem_eq(l, head)]
+                # the whole first word must match: «стекло» ~ «Стекло закаленное», but «металлический» ≠ «Металлобоксы»
+                head_hits = [i for i, l in enumerate(lemmas) if l == head]
                 if head_hits and (best is None or best[1] < PARTIAL_SCORE):
                     best = (value, PARTIAL_SCORE, "partial", {head_hits[0]})
             if len(vlem) < 5 or not grams:  # короткие (ЛДСП, МДФ) — только точно
