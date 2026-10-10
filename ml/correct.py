@@ -16,7 +16,7 @@ from symspellpy import SymSpell, Verbosity
 
 from ml.ktru import KtruStore
 from ml.text import is_known, lemma, pos, tokenize, word_forms
-from ml.units import UNIT_WORDS, USER_UNITS
+from ml.units import AXES_HEADER_RE, UNIT_WORDS, USER_UNITS
 from ml.values import load_synonyms
 
 EN = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`"
@@ -105,7 +105,8 @@ class Corrector:
         """Возвращает исправленный текст и список исправлений для показа пользователю."""
         corrections, out, pos = [], [], 0
         for t in tokens:
-            if not t["text"][0].isalpha() or len(t["text"]) < 3:
+            # the order of dimensions «ШхГхВ» is not a typo («шагов»)
+            if not t["text"][0].isalpha() or len(t["text"]) < 3 or AXES_HEADER_RE.fullmatch(t["text"]):
                 continue
             context = [o["lemma"] for o in tokens if o is not t and o["text"][0].isalpha() and self._in_vocab(o["text"])]
             fix = self._fix(t["text"], t.get("known", False), context)

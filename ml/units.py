@@ -14,11 +14,13 @@ from __future__ import annotations
 Числа, которым нет места в КТРУ у найденных товаров («стол письменный высотой 75 см» — у позиции
 нет характеристики высоты), возвращаются отдельно: их сохраняет иерархия источников (Портал / новая).
 """
+import os
 import re
+from itertools import permutations
 
 from ml.ktru import KtruStore, format_value, is_text_char
 from ml.numwords import find_number_words
-from ml.text import pos, tokenize
+from ml.text import main_noun, pos, tokenize
 
 # единица КТРУ (ОКЕИ) → (размерность, множитель к базовой единице размерности)
 KTRU_UNITS = {
@@ -73,6 +75,15 @@ SHORT_UNITS = {("mass", 1): "кг", ("mass", 0.001): "г", ("mass", 1e-6): "мг
                ("length", 10): "см", ("length", 100): "дм", ("length", 1000): "м", ("length", 25.4): "дюйм",
                ("power", 1): "Вт", ("power", 1000): "кВт", ("voltage", 1): "В", ("charge", 1): "А·ч",
                ("charge", 0.001): "мА·ч", ("rpm", 1): "об/мин", ("count", 1): "шт", ("temp", 1): "°C"}
+
+
+def _same_noun(noun: str, word: str) -> bool:
+    """«шкаф» names «Шкаф для одежды» and «Шкаф-купе», «матрас» names «Матрац» (one letter differs at the end),
+    but «электрод» does not name «Дрель электрическая»."""
+    if word == noun or word.startswith(noun + "-") or word.endswith("-" + noun):
+        return True
+    short = min(len(noun), len(word))
+    return short >= 5 and len(os.path.commonprefix([noun, word])) >= short - 1
 
 
 def _num(s: str) -> float:
@@ -150,6 +161,105 @@ def _user_unit(raw: str | None):
     return next((USER_UNITS[w] for w in UNIT_WORDS if raw.startswith(w)), None)
 
 
+# ---------- dimensions: «120x60x75 см», «1200х600х750», «Ш120 Г60 В75», «120 на 60» ----------
+
+AXES = ("Длина", "Ширина", "Глубина", "Высота")
+AXIS_LABELS = {"д": "Длина", "ш": "Ширина", "г": "Глубина", "в": "Высота"}
+DIM_UNIT = r"(?:мм|см|дм|м|mm|cm|миллиметр[а-я]*|сантиметр[а-я]*|метр[а-я]*)(?![a-zа-я0-9])"
+DIM_UNITS = {"mm": ("length", 1), "cm": ("length", 10)}
+_DIM_SEP = r"\s*[xх*]\s*"  # latin x, cyrillic х, «*»; «×» is normalized to «x» by ml.text.normalize
+_DIM_PART = rf"({NUM})(?:\s*({DIM_UNIT}))?"
+DIMS_RE = re.compile(
+    rf"(?<![\w.,/-]){_DIM_PART}(?:{_DIM_SEP}{_DIM_PART}(?:{_DIM_SEP}{_DIM_PART})?|\s+на\s+{_DIM_PART})"
+    rf"(?![\w/-]|[.,]\d)", re.IGNORECASE)
+# a label is not glued to a preceding letter, except the «х» separator: «Ш120хГ60хВ75»
+LABELED_RE = re.compile(rf"(?:^|(?<=[^A-Za-zА-Яа-яЁё])|(?<=[xхXХ]))([ДШГВдшгв])\.?\s*[:=]?\s*{_DIM_PART}"
+                        rf"(?![^\W_xхXХ]|[/-]|[.,]\d)", re.IGNORECASE)
+HEADER_RE = re.compile(r"(?<![^\W\d_])([ДШГВдшгв])\s*[xх*]\s*([ДШГВдшгв])(?:\s*[xх*]\s*([ДШГВдшгв]))?(?![^\W\d_])")
+# without a unit: numbers above this are millimetres («1200х600х750»), otherwise centimetres («120х60х75»)
+MM_THRESHOLD = 300
+# conventional order of overall dimensions — used on ties: Д/Ш × Г × В («120х60х75» = длина × ширина × высота)
+ORDER_PREF = {
+    3: ({"Длина": 0, "Ширина": 1, "Высота": 2, "Глубина": 3},
+        {"Ширина": 0, "Глубина": 0, "Длина": 2, "Высота": 3},
+        {"Высота": 0, "Глубина": 1, "Ширина": 2, "Длина": 3}),
+    2: ({"Длина": 0, "Ширина": 1, "Высота": 2, "Глубина": 2},
+        {"Ширина": 0, "Глубина": 0, "Высота": 1, "Длина": 2}),
+}
+OVERALL_SIZE_NAME = "Габаритные размеры"  # how the supplier portal calls the whole «Д×Ш×В» value
+# words that still mean the whole product: «Длина столешницы», «Высота до столешницы»,
+# «Ширина спального места» (the product name itself — «Высота шкафа» — is not counted)
+OVERALL_QUALIFIERS = {"столешница", "спальный", "место"}
+# words naming a dimension group before it («габариты», «размер спального места») and packaging sizes
+DIM_NAME_WORDS = {"габарит", "габаритный", "размер"}
+PACKAGING_WORDS = {"упаковка", "коробка", "тара"}
+# words that may stand before the overall dimensions in a fragment: «Габаритные размеры изделия (ДхШхВ), мм»
+PREFIX_WORDS = DIM_NAME_WORDS | OVERALL_QUALIFIERS | {"изделие", "товар", "общий", "внешний", "наружный", "в", "сбор",
+                                                      "собранный", "вид", "мм", "см", "м"}
+AXES_HEADER_RE = re.compile(r"[ДШГВдшгв](?:[xхXХ][ДШГВдшгв]){1,2}")
+
+
+def _dim_unit(raw: str | None):
+    if not raw:
+        return None
+    return DIM_UNITS.get(raw.lower()) or _user_unit(raw)
+
+
+def find_dimensions(text: str) -> list[dict]:
+    """Dimension groups: [{start, end, nums: [float], units: [unit|None], labels: [axis|None]}].
+
+    A unit written after any number applies to the numbers without their own unit.
+    """
+    groups = []
+    for m in LABELED_RE.finditer(text):  # «Ш120 Г60 В75», «д190*ш71*в46»
+        part = {"start": m.start(), "end": m.end(), "num": _num(m.group(2)), "unit": m.group(3),
+                "label": AXIS_LABELS[m.group(1).lower()]}
+        last = groups[-1] if groups else None
+        if last and re.fullmatch(r"[\s,;xх*/]*", text[last["end"]:m.start()], re.IGNORECASE) \
+                and part["label"] not in last["labels"] and len(last["nums"]) < 3:
+            last["end"] = m.end()
+            last["nums"].append(part["num"])
+            last["units"].append(part["unit"])
+            last["labels"].append(part["label"])
+        else:
+            groups.append({"start": m.start(), "end": m.end(), "nums": [part["num"]], "units": [part["unit"]],
+                           "labels": [part["label"]]})
+    groups = [g for g in groups if len(g["nums"]) >= 2]  # a single «В 220» is not a dimension
+    for m in DIMS_RE.finditer(text):
+        if any(g["start"] < m.end() and m.start() < g["end"] for g in groups):
+            continue
+        raw = [(m.group(i), m.group(i + 1)) for i in (1, 3, 5, 7) if m.group(i)]
+        # «2x20 Вт», «3х2.5 мм2» — not a size: a unit of another kind right after the group
+        after = re.match(r"\s*([^\s,;]+)", text[m.end():])
+        if after and _user_unit(after.group(1)) and _user_unit(after.group(1))[0] != "length":
+            continue
+        g = {"start": m.start(), "end": m.end(), "nums": [_num(a) for a, _ in raw], "units": [u for _, u in raw],
+             "labels": [None] * len(raw)}
+        # «ШхГхВ 500х600х1800», «габариты (ДхШхВ), мм: 1200х600х750» — axis order written before the numbers
+        offset = max(0, m.start() - 30)
+        h = list(HEADER_RE.finditer(text[offset:m.start()]))
+        tail = text[offset + h[-1].end():m.start()] if h else ""
+        if h and re.fullmatch(r"[\s:()=,.\-a-zа-я]*", tail, re.IGNORECASE):
+            letters = [x for x in h[-1].groups() if x]
+            if len(letters) == len(raw):
+                g["labels"] = [AXIS_LABELS[x.lower()] for x in letters]
+                g["start"] = offset + h[-1].start()
+                unit = re.search(rf"(?<![а-яa-z]){DIM_UNIT}", tail, re.IGNORECASE)
+                if unit and not any(g["units"]):
+                    g["units"][-1] = unit.group()
+        groups.append(g)
+    for g in groups:
+        explicit = [u for u in g["units"] if _dim_unit(u)]
+        default = _dim_unit(explicit[-1]) if explicit else None
+        g["unit_given"] = default is not None
+        if default is None:
+            default = ("length", 1) if max(g["nums"]) > MM_THRESHOLD else ("length", 10)
+        g["units"] = [_dim_unit(u) or default for u in g["units"]]
+        if any(u[0] != "length" for u in g["units"]):
+            g["units"] = None
+    return sorted((g for g in groups if g["units"]), key=lambda g: g["start"])
+
+
 class NumberMatcher:
     def __init__(self, store: KtruStore):
         self.store = store
@@ -178,16 +288,180 @@ class NumberMatcher:
             return a == b or (len(a) >= 5 and len(b) >= 5 and a[:5] == b[:5])
         return sum(any(eq(c, k) for c in context) for k in keys)
 
-    def match(self, text: str, codes: list[str]) -> tuple[list[dict], list[dict], list[list[int]], list[dict]]:
+    @staticmethod
+    def _axis_chars(chars: dict[str, dict]) -> dict[str, str]:
+        """Overall dimension characteristics of the candidates: axis → name.
+
+        «Высота шкафа» or «Высота (без учета регулировки)» is the overall height; «Высота выдвижного ящика» is a part.
+        Per axis the most general one wins (fewest key words besides the axis and the product name).
+        """
+        best: dict[str, tuple] = {}
+        for name, info in chars.items():
+            axis = name.split()[0].strip(",").capitalize()
+            if axis not in AXES or KTRU_UNITS.get(info["unit"], (None,))[0] != "length":
+                continue
+            lem = [t["lemma"] for t in tokenize(re.sub(r"\(.*?\)", "", name)) if t["text"][0].isalpha()]
+            keys = [l for l in lem if l not in GENERIC and l not in info["name_words"]]
+            if not set(keys[1:]) <= OVERALL_QUALIFIERS:
+                continue  # «Высота спинки», «Высота шрифта» — a part, not the whole product
+            key = (len(keys), -len(info["by_code"]), name)
+            if axis not in best or key < best[axis]:
+                best[axis] = key
+        return {axis: key[2] for axis, key in best.items()}
+
+    @staticmethod
+    def _label_char(label: str, axis_chars: dict[str, str]) -> str | None:
+        """KTRU characteristic for an explicitly labelled axis: «Ш» is «Длина» for a cabinet that has
+        «Длина × Глубина × Высота», «Г» is «Ширина» for a table that has «Длина × Ширина»."""
+        if label in axis_chars:
+            return axis_chars[label]
+        fallback = {"Ширина": "Длина", "Длина": "Ширина", "Глубина": "Ширина" if "Длина" in axis_chars else None}
+        alt = fallback.get(label)
+        if alt and alt in axis_chars and not (label == "Длина" and "Глубина" in axis_chars):
+            return axis_chars[alt]
+        return None
+
+    @staticmethod
+    def _fit(info: dict, mm: float) -> int:
+        """How well a length (in mm) fits a characteristic over the candidates: 2 — inside a bounded KTRU range,
+        1 — inside an open range, 0 — suspiciously far in an open range, -2 — outside every range."""
+        best = -2
+        for ktru_unit, values in info["by_code"].values():
+            dim, factor = KTRU_UNITS.get(ktru_unit, (None, 1))
+            if dim != "length":
+                continue
+            x = round(mm / factor, 9)
+            hit = next((v for v in values if contains(v, x)), None)
+            if hit is None:
+                continue
+            if hit.get("min") is not None and hit.get("max") is not None:
+                return 2
+            best = max(best, 0 if _suspicious("", hit, values, x, x, ktru_unit, "", None) else 1)
+        return best
+
+    def _assign_axes(self, nums_mm: list[float], labels: list, chars: dict, axis_chars: dict) -> list[tuple]:
+        """→ [(axis, KTRU characteristic or None)] for each number of a dimension group."""
+        n = len(nums_mm)
+        if any(labels):
+            return [(label, self._label_char(label, axis_chars) if label else None) for label in labels]
+        available = [a for a in AXES if a in axis_chars]
+        # axes without a KTRU characteristic still get a conventional name (they go to the portal / new level)
+        pad = [a for a in ("Длина", "Ширина", "Высота", "Глубина") if a not in available
+               and not (a == "Ширина" and "Глубина" in available) and not (a == "Глубина" and "Ширина" in available)]
+        if not available:
+            return [(a, None) for a in pad[:n]]
+        pref = ORDER_PREF[n]
+
+        def score(perm):
+            fit = sum(self._fit(chars[axis_chars[a]], x) if a in axis_chars else 0 for a, x in zip(perm, nums_mm))
+            return fit, -sum(pref[i][a] for i, a in enumerate(perm))
+
+        # padding only when the candidates have fewer axes than numbers: otherwise a number outside the KTRU ranges
+        # would escape to a padded axis instead of being reported.
+        # Three horizontal axes at once is not a reading of «Д×Ш×В» (a mixed pool may have «Длина», «Ширина» and
+        # «Глубина»): the height must be one of the three
+        extra = max(0, n - len(available))
+        while True:
+            pool = available + pad[:extra]
+            perms = [p for p in permutations(pool, n) if not {"Длина", "Ширина", "Глубина"} <= set(p)]
+            if perms or extra >= len(pad):
+                break
+            extra += 1
+        best = max(perms, key=score) if perms else available[:n]
+        return [(a, axis_chars.get(a)) for a in best]
+
+    def _match_dimensions(self, text: str, g: dict, chars: dict, rank: dict, category: str | None,
+                          tokens: list[dict], first: bool):
+        """A dimension group → (characteristics, errors, unmatched, reserved): each number goes to an axis
+        characteristic of the candidates; the order «Д×Ш×В» vs «Ш×Г×В» vs «В×Ш×Г» is chosen by how the numbers fit
+        the KTRU ranges."""
+        found, errors, unmatched = [], [], []
+        source = text[g["start"]:g["end"]].strip()
+        span = [g["start"], g["start"] + len(source)]
+        # words naming the group in its fragment: «Размер спального места 160*80», «Габариты в упаковке 159x113x29»
+        frag_start = _last_sep(text, g["start"])
+        prefix = [t for t in tokens if frag_start <= t["span"][0] and t["span"][1] <= g["start"] and t["text"][0].isalpha()]
+        named_from = next((i for i, t in enumerate(prefix) if t["lemma"] in DIM_NAME_WORDS), None)
+        reserved = [t["span"] for t in prefix[named_from:]] if named_from is not None else []
+        packaging = next((i for i, t in enumerate(prefix) if t["lemma"] in PACKAGING_WORDS), None)
+        # the first group is the product's; a later one outside the product name, after other words, is a part's:
+        # «Кровать 1900х800, …, металлический уголок 140мм*120мм»
+        part = not first and g["start"] >= _next_sep(text, 0) and any(
+            t["lemma"] not in PREFIX_WORDS and not AXES_HEADER_RE.fullmatch(t["text"]) for t in prefix)
+        axis_chars = self._axis_chars(chars)
+        # furniture and clothing sizes are «Д×Ш×В»; a tool's «14 x 150 мм» may be diameter × length, so a tool gets
+        # axes only when its KTRU characteristics cover every number
+        unknown_order = category not in ("мебель", "одежда") and len(axis_chars) < len(g["nums"])
+        if packaging is not None or part or (not any(g["labels"]) and (unknown_order or (
+                not axis_chars and category != "мебель"))):
+            # sizes of the packaging or of a part are not the product's; without axis characteristics and axis
+            # names — keep the whole value under its own name («Габариты в упаковке») or as the portal calls it
+            value = "x".join(_fmt(x) for x in g["nums"]) + (f" {SHORT_UNITS[g['units'][-1]]}" if g["unit_given"] else "")
+            keyword, keyword_span = OVERALL_SIZE_NAME, None
+            if packaging is not None or part:
+                first = 0 if part else min(packaging, named_from) if named_from is not None else packaging
+                keyword_span = [prefix[first]["span"][0], prefix[-1]["span"][1]]
+                keyword = text[keyword_span[0]:keyword_span[1]]
+                reserved = [t["span"] for t in prefix[first:]]
+            unmatched.append({"source": value, "span": span, "a": g["nums"][0], "b": None, "unit_raw": None,
+                              "value_text": value, "dimension": "length", "number_spans": [], "synthetic": True,
+                              "keyword": keyword, "keyword_span": keyword_span})
+            return found, errors, unmatched, reserved
+        nums_mm = [x * u[1] for x, u in zip(g["nums"], g["units"])]
+        for x, unit, (axis, name) in zip(g["nums"], g["units"], self._assign_axes(nums_mm, g["labels"], chars, axis_chars)):
+            value_text = f"{_fmt(x)} {SHORT_UNITS[unit]}"
+            if name:
+                entry, err = self._resolve(name, chars[name], x, None, unit, value_text, span, rank)
+                if entry:
+                    found.append({**entry, "source": source, "method": "dimensions", "value_text": value_text,
+                                  "axis": axis})
+                if err:
+                    errors.append({**err, "source": source})
+            else:
+                unmatched.append({"source": value_text, "span": span, "a": x, "b": None, "unit_raw": None,
+                                  "value_text": value_text, "dimension": "length", "number_spans": [],
+                                  "synthetic": True, "keyword": axis, "keyword_span": None})
+        return found, errors, unmatched, reserved
+
+    def match(self, text: str, codes: list[str], skip: list[list[int]] = ()) -> tuple[list[dict], list[dict], list[list[int]], list[dict]]:
         """→ (характеристики, ошибки, спаны слов, занятых числами — их не берут текстовые характеристики,
-        числа без места в КТРУ у этих товаров — для Портала / новых характеристик)."""
+        числа без места в КТРУ у этих товаров — для Портала / новых характеристик).
+        skip — spans already taken by another matcher (clothing sizes)."""
         chars = self._num_chars(codes)
         rank = {c: i for i, c in enumerate(codes)}
         product_words = {t["lemma"] for c in codes for t in tokenize(self.store.by_code[c]["name"])}
         found, errors, reserved, unmatched = [], [], [], []
         tokens = tokenize(text)
+        category = self.store.by_code[codes[0]]["category"] if codes else None
+        taken = [list(s) for s in skip]
+
+        groups = find_dimensions(text)
+        if groups:
+            # dimensions belong to the product itself: only candidates named by the product noun of the request
+            # («сверло 3 x 61 мм» must not land in «Ширина тумбы» of a stray furniture candidate); no such
+            # candidate («электрод 2х350мм») — no axis characteristics at all
+            noun = main_noun(text.split(",")[0])
+            dim_codes = [c for c in codes if any(_same_noun(noun, t["lemma"]) for t in tokenize(self.store.by_code[c]["name"]))] \
+                if noun else [c for c in codes if self.store.by_code[c]["name"] == self.store.by_code[codes[0]]["name"]]
+            dim_chars = chars if dim_codes == codes else self._num_chars(dim_codes)
+        first = True
+        for g in groups:
+            if any(s < g["end"] and g["start"] < e for s, e in taken):
+                continue
+            # a bare pair without a unit («10х12») is a size only for furniture; for tools it is a model or a key size
+            if len(g["nums"]) == 2 and not g["unit_given"] and not any(g["labels"]) and category != "мебель":
+                continue
+            f, e, u, r = self._match_dimensions(text, g, dim_chars, rank, category, tokens, first)
+            first = False
+            found += f
+            errors += e
+            unmatched += u
+            taken.append([g["start"], g["end"]])
+            reserved += r + [t["span"] for t in tokens if g["start"] <= t["span"][0] and t["span"][1] <= g["end"]]
 
         for m in _mentions(text):
+            if any(s < m["end"] and m["start"] < e for s, e in taken):
+                continue
             a, b, unit, unit_raw = m["a"], m["b"], _user_unit(m["unit_raw"]), m["unit_raw"]
             # words around the number within the fragment (up to a comma that is not a decimal separator)
             seg_start = max(_last_sep(text, m["start"]), 0)

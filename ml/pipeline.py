@@ -42,6 +42,7 @@ from ml.narrow import answer_to_characteristic, missing_required, narrow
 from ml.search import EMB_MODEL, Searcher
 from ml.text import main_noun, normalize, pos, to_nominative, tokenize
 from ml.portal import PortalMatcher, new_characteristic
+from ml.sizes import SizeMatcher
 from ml.units import DIMENSION_NAMES, NumberMatcher
 from ml.values import GENERIC, ValueMatcher, _lemmas, _stem_eq
 
@@ -58,7 +59,8 @@ SKIP_POS = {"PREP", "CONJ", "PRCL", "INTJ", "NPRO", "NUMR", "ADVB", "PRED", "COM
 # attribute names: alone, without a value, they are not a feature of the product («Арт.», «Размер», «Производитель»)
 ATTRIBUTE_WORDS = {"арт", "артикул", "модель", "производитель", "страна", "бренд", "марка", "количество", "размер",
                    "тип", "вид", "комплект", "комплектация", "набор", "серия", "код", "цвет", "материал", "состав",
-                   "назначение", "исполнение", "гарантия", "упаковка", "описание", "параметр", "характеристика"}
+                   "назначение", "исполнение", "гарантия", "упаковка", "описание", "параметр", "характеристика",
+                   "габарит"}
 
 
 def _between_digits(text: str, i: int) -> bool:
@@ -72,6 +74,7 @@ class Pipeline:
         self.searcher = Searcher(self.store, model_name, rerank)
         self.values = ValueMatcher(self.store, self.searcher)
         self.numbers = NumberMatcher(self.store)
+        self.sizes = SizeMatcher(self.store)
         self.portal = PortalMatcher()
 
     def analyze(self, request: dict | str) -> dict:
@@ -107,13 +110,21 @@ class Pipeline:
         tick("search")
 
         # 3. характеристики: текстовые значения и числа
-        num_chars, num_errors, reserved, unmatched_numbers = self.numbers.match(text, codes)
+        # clothing sizes first («р. 52-54», «XL»): their numbers and letters are not taken by other matchers
+        size_chars, size_errors, size_reserved, unmatched_sizes = self.sizes.match(text, codes)
+        num_chars, num_errors, reserved, unmatched_numbers = self.numbers.match(text, codes, size_reserved)
+        num_chars = size_chars + [f for f in num_chars if f["name"] not in {s["name"] for s in size_chars}]
+        num_errors = size_errors + num_errors
+        reserved += size_reserved
+        unmatched_numbers += unmatched_sizes
         text_chars, value_errors, normalizations = self.values.match(text, codes, reserved)
+        text_chars = [f for f in text_chars if f["name"] not in {s["name"] for s in size_chars}]
         corrections += normalizations
         # a value that formally fits an open KTRU range but looks wrong must not pick the final code
-        suspicious = {tuple(e["span"]) for e in num_errors if e["type"] == "suspicious_value"}
+        # (keyed by characteristic too: the numbers of «120x60x75 см» share one span)
+        suspicious = {(e["characteristic"], tuple(e["span"])) for e in num_errors if e["type"] == "suspicious_value"}
         for f in num_chars:
-            f["suspicious"] = tuple(f["span"]) in suspicious
+            f["suspicious"] = (f["name"], tuple(f["span"])) in suspicious
         answered = []
         for a in answers:
             if a["type"] != "characteristic":
@@ -149,9 +160,11 @@ class Pipeline:
             pool_chars = {ch["name"] for c in pool for ch in self.store.by_code[c["code"]]["characteristics"]}
             for f in characteristics:
                 if f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars:
+                    # a dimension of a dropped candidate («Ширина стеллажа» for a chair) keeps only its axis
+                    f["name"] = f.get("axis") or f["name"]
                     f["origin"] = "portal" if self.portal.has(category, f["name"]) else "new"
                     if f.get("user_value"):  # a number: show it as the user wrote it, KTRU ranges do not apply
-                        f["value"], f["unit"] = f["source"], None
+                        f["value"], f["unit"] = f.get("value_text") or f["source"], None
             taken = [f["span"] for f in characteristics if f.get("span")] + \
                     [e["span"] for e in value_errors + num_errors if e.get("span")] + reserved + \
                     self.values.last_consumed
@@ -221,6 +234,11 @@ class Pipeline:
         for n in unmatched_numbers:
             phrase = f"{n['keyword']} {n['source']}" if n["keyword"] else n["source"]
             found = self.portal.match(phrase, category)
+            if found and n.get("synthetic"):
+                # a size or a dimension named by us: its format («120x60x75 см», «XL») is not compared
+                # with the portal's free-text examples
+                found.pop("unknown_value", None)
+                found.pop("known_values", None)
             if found:
                 item = {**found, "portal": True}
             else:

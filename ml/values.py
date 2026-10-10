@@ -25,6 +25,7 @@ import numpy as np
 from rapidfuzz import fuzz, process
 
 from ml.ktru import KtruStore, is_bool_char, is_text_char
+from ml.sizes import is_letter_size_char
 from ml.text import main_noun, pos, tokenize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -109,7 +110,8 @@ class ValueMatcher:
             item = self.store.by_code[code]
             item_words = set(_lemmas(item["name"]))
             for ch in item["characteristics"]:
-                if not is_text_char(ch):
+                # letter sizes (S, M, XL) are matched by ml/sizes.py: here «2 м» would become «Размер: М»
+                if not is_text_char(ch) or is_letter_size_char(ch):
                     continue
                 name_words.setdefault(ch["name"], set()).update(item_words)
                 info = chars.setdefault(ch["name"], CharInfo(ch["name"], is_bool_char(ch)))
