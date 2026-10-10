@@ -22,6 +22,7 @@ from __future__ import annotations
                        source — фрагмент текста пользователя; origin — откуда характеристика:
                        ktru (справочник КТРУ) | portal (справочник Портала) | new (нет ни там, ни там —
                        сохраняем, не выбрасываем) | answer (выбрана пользователем из вариантов КТРУ);
+    category         — категория найденных товаров (одежда | мебель | инструменты) или null;
     candidates       — оставшиеся коды КТРУ {code, name, score}, candidates_total — их число;
     errors           — {type, severity, message, ...}: nonexistent_value, out_of_range, unit_mismatch,
                        conflict, contradiction, product_not_found, invalid_input (severity=error);
@@ -142,7 +143,7 @@ class Pipeline:
         tick("narrow")
 
         # 5. то, что не легло на КТРУ, не выбрасываем: справочник Портала, иначе — новая характеристика
-        extra_notices, signals = [], []
+        extra_notices, signals, category = [], [], None
         if not not_found and candidates:
             pool = remaining or candidates
             category = self.store.by_code[pool[0]["code"]]["category"]
@@ -198,6 +199,7 @@ class Pipeline:
             "corrections": corrections,
             "characteristics": [self._public(f) for f in characteristics if not f.get("conflict")],
             "product_intent": product_intent,
+            "category": category,
             "subtype_context": signals,
             "retrieval_count": len(candidates),
             "compatible_count": next((s["count"] for s in steps[1:] if s["stage"].startswith("Наименование")), len(candidates)),

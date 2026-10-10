@@ -1,4 +1,5 @@
-# Full stack: frontend -> backend (aggregator) -> model, sessions in Redis.
+# Full stack: frontend -> backend (aggregator) -> model, sessions in Redis,
+# new characteristics seen by the model in Postgres.
 #   docker compose -f deployment/docker-compose.yaml up --build
 # UI: http://localhost:8080   API: http://localhost:8000   model: http://localhost:8001
 
@@ -14,6 +15,23 @@ services:
       timeout: 3s
       retries: 5
 
+  # reachable only inside the compose network (no published port); the model creates its table itself
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ktru
+      POSTGRES_USER: ktru
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ktru}
+    volumes:
+      # postgres 18+ keeps data under /var/lib/postgresql/<version>, so the volume is the parent dir
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ktru -d ktru"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   model:
     build:
       # the image needs ml/ and data/processed/ktru.parquet from the repository root
@@ -22,10 +40,15 @@ services:
     restart: unless-stopped
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      POSTGRES_DSN: postgresql://ktru:${POSTGRES_PASSWORD:-ktru}@postgres:5432/ktru
     volumes:
       - ../data/processed:/app/data/processed:ro
     ports:
       - "8001:8001"
+    depends_on:
+      # started, not healthy: without Postgres the model works, only the known-characteristics step is skipped
+      postgres:
+        condition: service_started
     # healthcheck (GET /ready) comes from ml/Dockerfile
 
   backend:
@@ -52,3 +75,6 @@ services:
       - "8080:80"
     depends_on:
       - backend
+
+volumes:
+  postgres-data:

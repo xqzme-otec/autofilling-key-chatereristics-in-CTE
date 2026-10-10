@@ -237,6 +237,31 @@ func TestCharacteristicUnitAndErrorFields(t *testing.T) {
 	jsonEq(t, body["missing_required"], `[]`)
 }
 
+// category and known (new characteristics seen in earlier descriptions) reach the frontend as the
+// model sent them; known=false is kept, and where the model did not check, known is absent.
+func TestCategoryAndKnownReachTheFrontend(t *testing.T) {
+	e := setup(t)
+	e.model.reply = func(p map[string]any) (int, any) {
+		_, res := e.model.ok(p)
+		r := res.(map[string]any)
+		r["category"] = "мебель"
+		r["characteristics"] = []any{
+			map[string]any{"name": "Тип каркаса", "value": "Металлический", "origin": "ktru", "confidence": 0.85},
+			map[string]any{"name": "Противоскользящие ножки", "value": "Да", "origin": "new", "confidence": 0.5, "known": true},
+			map[string]any{"name": "Магнитная накладка", "value": "Да", "origin": "new", "confidence": 0.5, "known": false}}
+		return 200, r
+	}
+	body := e.start(t)
+
+	if body["category"] != "мебель" {
+		t.Errorf("category: got %v", body["category"])
+	}
+	jsonEq(t, body["characteristics"], `[
+		{"name": "Тип каркаса", "value": "Металлический", "origin": "ktru", "confidence": 0.85},
+		{"name": "Противоскользящие ножки", "value": "Да", "origin": "new", "confidence": 0.5, "known": true},
+		{"name": "Магнитная накладка", "value": "Да", "origin": "new", "confidence": 0.5, "known": false}]`)
+}
+
 func TestAnswerResendsTextWithAllAnswers(t *testing.T) {
 	e := setup(t)
 	id := e.start(t)["session_id"].(string)

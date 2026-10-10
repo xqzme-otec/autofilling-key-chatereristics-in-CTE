@@ -17,6 +17,7 @@ type sessionResponse struct {
 	Corrections     []domain.Correction     `json:"corrections"`
 	Characteristics []domain.Characteristic `json:"characteristics"`
 	ProductIntent   *string                 `json:"product_intent,omitempty"`
+	Category        *string                 `json:"category,omitempty"`
 	SubtypeContext  []domain.ContextSignal  `json:"subtype_context,omitempty"`
 	RetrievalCount  *int                    `json:"retrieval_count,omitempty"`
 	CompatibleCount *int                    `json:"compatible_count,omitempty"`
@@ -45,6 +46,7 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 		Corrections:     nonNil(r.Corrections),
 		Characteristics: nonNil(r.Characteristics),
 		ProductIntent:   r.ProductIntent,
+		Category:        r.Category,
 		SubtypeContext:  r.SubtypeContext,
 		RetrievalCount:  r.RetrievalCount,
 		CompatibleCount: r.CompatibleCount,
