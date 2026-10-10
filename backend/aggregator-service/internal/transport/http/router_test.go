@@ -195,7 +195,7 @@ func TestAnalyzeSendsTextAsTypedAndReturnsAgreedForm(t *testing.T) {
 		t.Fatal("empty session_id")
 	}
 	jsonEq(t, body, `{
-		"corrections": [{"from": "стл", "to": "стул", "reason": "опечатка"}],
+		"corrections": [{"from": "стл", "to": "стул", "reason": "опечатка", "alternatives": ["стол"]}],
 		"characteristics": [{"name": "Тип каркаса", "value": "Металлический", "source": "металлическом",
 			"origin": "ktru", "confidence": 0.85}],
 		"candidates": [
@@ -204,7 +204,7 @@ func TestAnalyzeSendsTextAsTypedAndReturnsAgreedForm(t *testing.T) {
 		"candidates_total": 2,
 		"errors": [],
 		"missing_required": ["Наличие подлокотников"],
-		"next_step": {"message": "Уточните характеристику:", "characteristic": "Наличие подлокотников", "options": ["Да", "Нет"]},
+		"next_step": {"type": "characteristic", "message": "Уточните характеристику:", "characteristic": "Наличие подлокотников", "options": ["Да", "Нет"]},
 		"ktru": null, "ktru_name": null,
 		"steps": [{"stage": "Поиск по описанию", "count": 2}]}`)
 	jsonEq(t, e.model.requests, `[{"raw": `+quoted(userText)+`, "answers": []}]`)

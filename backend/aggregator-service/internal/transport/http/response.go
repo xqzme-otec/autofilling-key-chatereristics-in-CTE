@@ -33,6 +33,7 @@ type sessionResponse struct {
 }
 
 type nextStepResponse struct {
+	Type           string   `json:"type"` // product, characteristic or code: how the UI shows the question
 	Message        string   `json:"message"`
 	Characteristic *string  `json:"characteristic"`
 	Options        []string `json:"options"`
@@ -58,10 +59,10 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 		Steps:           nonNil(r.Steps),
 	}
 	if q := r.NextStep; q != nil {
-		out.NextStep = &nextStepResponse{Message: *q.Message, Characteristic: q.Characteristic, Options: q.Options}
+		out.NextStep = &nextStepResponse{Type: q.Type, Message: *q.Message, Characteristic: q.Characteristic, Options: q.Options}
 	}
 	if q := r.NextQuestion; q != nil {
-		out.NextQuestion = &nextStepResponse{Message: *q.Message, Characteristic: q.Characteristic, Options: q.Options}
+		out.NextQuestion = &nextStepResponse{Type: q.Type, Message: *q.Message, Characteristic: q.Characteristic, Options: q.Options}
 	}
 	return out
 }

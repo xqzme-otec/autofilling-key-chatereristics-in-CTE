@@ -30,6 +30,8 @@ type Correction struct {
 	From   string  `json:"from"`
 	To     string  `json:"to"`
 	Reason *string `json:"reason"`
+	// Alternatives are other corrections for an ambiguous typo («стл» → «стол», or «стул»?)
+	Alternatives []string `json:"alternatives,omitempty"`
 }
 
 type Characteristic struct {
