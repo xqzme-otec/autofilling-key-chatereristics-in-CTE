@@ -42,6 +42,11 @@ class Corrector:
             for t in tokenize(store.passage(item)):
                 if t["text"][0].isalpha():
                     self.postings.setdefault(t["lemma"], set()).add(i)
+        self.products = Counter()
+        for item in store.items:
+            noun = next((t["lemma"] for t in tokenize(item["name"]) if pos(t["text"]) == "NOUN"), None)
+            if noun:
+                self.products[noun] += 1
 
     def _in_vocab(self, word: str) -> bool:
         w = word.lower()
@@ -52,7 +57,7 @@ class Corrector:
         items = self.postings.get(lemma(term), set())
         return sum(len(items & self.postings.get(w, set())) for w in context)
 
-    def _fix(self, word: str, known: bool, context: list[str] = ()) -> tuple[str, str, list[str]] | None:
+    def _fix(self, word: str, known: bool, context: list[str] = (), product: bool = False) -> tuple[str, str, list[str]] | None:
         """Возвращает (исправление, причина, другие варианты) или None, если слово в порядке.
 
         Из равноудалённых вариантов («стл» → «стол» / «стул») выбираем тот, что чаще
@@ -60,6 +65,17 @@ class Corrector:
         """
         if self._in_vocab(word):
             return None
+
+        if product and len(word) >= 4 and not all(c.isascii() for c in word):
+            from rapidfuzz.distance import DamerauLevenshtein
+            options = [(self._context_score(noun, context), count, noun)
+                       for noun, count in self.products.items()
+                       if DamerauLevenshtein.distance(word.lower(), noun) <= 1]
+            if options:
+                _, _, noun = max(options)
+                if noun != lemma(word) and (not known or self._context_score(noun, context) > 0
+                                           or len(options) == 1):
+                    return noun, "уточнение названия товара по КТРУ", []
 
         if known or all(c.isascii() for c in word):
             return None  # латиница после fix_layout — бренды, модели, марки: не трогаем
@@ -104,11 +120,12 @@ class Corrector:
     def correct(self, text: str, tokens: list[dict]) -> tuple[str, list[dict]]:
         """Возвращает исправленный текст и список исправлений для показа пользователю."""
         corrections, out, pos = [], [], 0
+        first_word = next((t for t in tokens if t["text"][0].isalpha()), None)
         for t in tokens:
             if not t["text"][0].isalpha() or len(t["text"]) < 3:
                 continue
             context = [o["lemma"] for o in tokens if o is not t and o["text"][0].isalpha() and self._in_vocab(o["text"])]
-            fix = self._fix(t["text"], t.get("known", False), context)
+            fix = self._fix(t["text"], t.get("known", False), context, t is first_word)
             if fix is None:
                 continue
             new, reason, alternatives = fix
