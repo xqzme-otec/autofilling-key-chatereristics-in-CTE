@@ -31,6 +31,8 @@
 
 ## Быстрый старт (ML)
 
+Нужен Python 3.10 или новее; контейнер модели использует Python 3.13.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -38,13 +40,17 @@ python3 -m venv .venv
 # словарь Портала (уровень «portal» в иерархии источников характеристик):
 # положить Инструменты.xlsx, Мебель.xlsx, Одежда.xlsx в data/raw/supplier_portal/, затем
 .venv/bin/python -m ml.portal build
+.venv/bin/python -m ml.newchar build
 
 .venv/bin/python -m eval.try          # ввести описание товара и посмотреть разбор по шагам
 .venv/bin/python -m pytest -q         # тесты
 ```
 
-Без словаря Портала пайплайн работает: характеристики вне КТРУ сохраняются как новые (`origin: new`).
-При первом запуске скачивается модель `intfloat/multilingual-e5-small` (~470 МБ), видеокарта не нужна.
+Без словаря Портала пайплайн работает: характеристики вне КТРУ сохраняются как новые (`origin: new`). Без
+`data/processed/newchar_model.pkl` новые характеристики проверяются только правилами; состояние видно в
+`GET http://localhost:8001/ready` как `newchar_classifier: rules_only`.
+При первом запуске скачивается открытая модель `intfloat/multilingual-e5-small` (~470 МБ). Она работает локально
+на CPU, видеокарта и внешние LLM API не нужны.
 
 ```python
 from ml.pipeline import Pipeline
@@ -54,3 +60,16 @@ result = p.analyze("стул ученический, ростовая групп
 ```
 
 Формат ответа и работа с уточняющими вопросами — в [`ML.md`](ML.md).
+
+## Полный стек и пять демо-сценариев
+
+```bash
+docker compose -f deployment/docker-compose.yaml up --build
+# в другом терминале:
+.venv/bin/python scripts/smoke_e2e.py
+```
+
+Интерфейс: `http://localhost:8080`, API: `http://localhost:8000`. Smoke ждёт готовности сервисов и проверяет
+путь до конечного кода, исправление опечатки, ошибочную единицу, уточняющий диалог и проверку новых характеристик.
+По умолчанию он требует статус классификатора `loaded`; режим только с правилами проверяется отдельным флагом
+`--allow-rules-only`.

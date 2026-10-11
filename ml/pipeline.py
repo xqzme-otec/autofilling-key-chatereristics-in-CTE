@@ -18,10 +18,11 @@ Output:
     text             — the text after normalization and corrections;
     corrections      — corrections (typos, keyboard layout — span in input;
                        normalization to KTRU values — span in text);
-    characteristics  — {name, value, unit, source, span (in text), method, confidence, origin};
-                       source — fragment of the user text; origin — where the characteristic comes from:
-                       ktru (KTRU reference) | portal (portal reference) | new (in neither —
-                       kept, never dropped) | answer (chosen by the user from KTRU options);
+    characteristics  — {name, value, unit, source, user_text, span (in text), method, confidence, origin};
+                       source — technical source (ktru / portal / user); user_text — source fragment;
+                       origin — where the characteristic comes from:
+                       ktru (KTRU reference) | portal (portal reference) | new (in neither; checked by
+                       the service layer) | answer (chosen by the user from KTRU options);
     category         — category of the found products (одежда | мебель | инструменты) or null;
     candidates       — remaining KTRU codes {code, name, score}, candidates_total — their count;
     errors           — {type, severity, message, ...}: nonexistent_value, out_of_range, unit_mismatch,

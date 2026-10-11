@@ -105,8 +105,12 @@ def check_aggregator_contract(r: dict) -> None:
 
 
 def test_ready(client):
-    assert client.get("/ready").json()["status"] == "ready"
-    assert client.get("/health").json() == {"status": "ok", "pipeline": "ready", "postgres": "off"}
+    ready = client.get("/ready").json()
+    assert ready["status"] == "ready"
+    assert ready["newchar_classifier"] in ("loaded", "rules_only")
+    health = client.get("/health").json()
+    assert health["status"] == "ok" and health["pipeline"] == "ready" and health["postgres"] == "off"
+    assert health["newchar_classifier"] in ("loaded", "rules_only")
 
 
 @pytest.mark.parametrize("raw", TEXTS)

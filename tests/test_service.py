@@ -87,7 +87,8 @@ def client(fake):
 def test_health_ok(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "pipeline": "ready", "postgres": "off"}
+    assert r.json() == {"status": "ok", "pipeline": "ready", "postgres": "off",
+                        "newchar_classifier": "rules_only"}
 
 
 def test_ready_when_loaded(client):
@@ -96,6 +97,7 @@ def test_ready_when_loaded(client):
     body = r.json()
     assert body["status"] == "ready"
     assert isinstance(body["load_seconds"], float)
+    assert body["newchar_classifier"] == "rules_only"
 
 
 def test_while_loading_health_answers_and_analyze_is_503():
@@ -107,7 +109,8 @@ def test_while_loading_health_answers_and_analyze_is_503():
         return pipeline
 
     with client_for(factory=slow_factory, background=True) as c:
-        assert c.get("/health").json() == {"status": "ok", "pipeline": "loading", "postgres": "off"}
+        assert c.get("/health").json() == {"status": "ok", "pipeline": "loading", "postgres": "off",
+                                          "newchar_classifier": "loading"}
         r = c.get("/ready")
         assert r.status_code == 503 and r.json()["status"] == "loading"
         r = c.post("/analyze", json={"raw": "стул", "answers": []})
@@ -127,7 +130,8 @@ def test_failed_load_is_reported(caplog):
 
     caplog.set_level(logging.INFO)
     with client_for(factory=broken_factory) as c:
-        assert c.get("/health").json() == {"status": "ok", "pipeline": "failed", "postgres": "off"}
+        assert c.get("/health").json() == {"status": "ok", "pipeline": "failed", "postgres": "off",
+                                          "newchar_classifier": "load_failed"}
         r = c.get("/ready")
         assert r.status_code == 503
         assert r.json()["status"] == "failed"

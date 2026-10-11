@@ -10,8 +10,9 @@ Training pairs come from real supplier portal cards (sheet 1 of the exports):
             it («кресло» — «Длина волны»), plus evaluative words with any product («Стильный»).
 Characteristic names of the validation part never occur in training. The thresholds are chosen on the
 validation part plus the hand-labeled eval/newchar_val.jsonl: each decided zone must be right in 98 % of cases.
-Compared with the rules alone, e5 + LR on the hand-written eval/newchar_manual.jsonl: macro-F1 0.74 -> 0.81,
-7 of 10 ambiguous cases go to UNCERTAIN (see ML.md). Heavy generative LLMs were rejected: the production server
+On the hand-written eval/newchar_manual.jsonl, rules have macro-F1 0.873 and e5 + LR has 0.838 because it sends
+more rare valid cases to UNCERTAIN; it also sends 7 of 10 ambiguous cases there (see ML.md). The classifier is a
+semantic safety layer, not a blanket replacement for rules. Heavy generative LLMs were rejected: the production server
 has 4 CPU and 4 GB RAM.
 
     .venv/bin/python -m ml.newchar build   # data/raw/supplier_portal/*.xlsx -> data/processed/newchar_model.pkl

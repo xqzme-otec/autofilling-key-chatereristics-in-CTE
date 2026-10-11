@@ -331,7 +331,7 @@ curl -s -X POST localhost:8000/api/v1/analyze/batch -F 'file=@products.xlsx'
 
 ## 4. Контракт модельного сервиса (агрегатор → модель)
 
-Агрегатор вызывает один эндпоинт. Это тонкая HTTP-обёртка над `Pipeline.analyze()` из
+Для анализа агрегатор вызывает один эндпоинт. Это тонкая HTTP-обёртка над `Pipeline.analyze()` из
 `ml/pipeline.py`: тело запроса передаётся в `analyze()` как есть, результат возвращается как есть.
 
 Модельный сервис — `ml/service/` (FastAPI, `python -m ml.service`, порт 8001). Кроме `POST /analyze` у него есть
@@ -366,6 +366,16 @@ curl -s -X POST localhost:8000/api/v1/analyze/batch -F 'file=@products.xlsx'
 `known` (`true` — уже встречалась в другом описании того же товара; поля нет, если Postgres недоступен).
 Агрегатор передаёт оба поля фронтенду как есть (раздел 3): `known: false` сохраняется, отсутствующее
 поле остаётся отсутствующим.
+
+### Состояние модельного сервиса
+
+- `GET /health` всегда отвечает, пока жив процесс, и возвращает `status`, `pipeline`, `postgres` и
+  `newchar_classifier`.
+- `GET /ready` возвращает `200`, когда основной пайплайн готов, и `503` при `loading` или `failed`.
+- `newchar_classifier`: `loading`, `loaded`, `rules_only` (артефакт отсутствует) или `load_failed`.
+
+Для полноценного режима перед запуском собирается `data/processed/newchar_model.pkl` командой
+`python -m ml.newchar build`. Docker Compose монтирует весь `data/processed` в модельный сервис только для чтения.
 
 ---
 

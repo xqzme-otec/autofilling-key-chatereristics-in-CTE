@@ -11,8 +11,8 @@ let through is judged by the classifier of ml/newchar.py:
      fits when the name contains a multi-word portal characteristic of that dimension: «Максимальная
      энергия удара 1.9 Дж» for a perforator (portal: «Энергия удара», Дж).
 
-A characteristic that does not fit is kept in the result (docs/DOC.md, invariant 2): it is only not
-remembered, and the user gets a warning.
+A characteristic that does not fit is removed from the normalized card, retained in the warning for
+explanation, and not remembered. A characteristic is never rejected merely because it is absent from KTRU.
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ MIN_PROFILE_HITS = 3
 # a little of every category into each file, so «never» is too strict; a generic word («функция») is common enough
 # everywhere not to be foreign
 MIN_FOREIGN_USES = 3
+MIN_WEAK_FOREIGN_USES = 1
 FOREIGN_RATIO = 0.01
 MAX_OWN_USES = 2  # or this category uses it at most this many times
 UNIVERSAL_DIMS = {"length", "mass", "count", "share", "temp", "time", "area", "density"}
@@ -110,12 +111,15 @@ class ProductFit:
     def __init__(self, store, portal_path: Path | None = None):
         portal_path = portal_path or DICT_PATH
         positions: dict[tuple[str, str], set] = defaultdict(set)   # (category, product) -> dimensions
+        position_count: Counter = Counter()
         category_count: dict[str, Counter] = defaultdict(Counter)  # category -> dimension -> positions
         for item in store.items:
             dims = {KTRU_UNIT_DIMS[ch["unit"]] for ch in item["characteristics"] if ch.get("unit") in KTRU_UNIT_DIMS}
             positions[(item["category"], main_noun(item["name"]))] |= dims
+            position_count[(item["category"], main_noun(item["name"]))] += 1
             category_count[item["category"]].update(dims)
         self.product_dims = dict(positions)
+        self.product_position_count = position_count
         self.category_dims = {c: {d for d, n in cnt.items() if n >= MIN_KTRU_POSITIONS} for c, cnt in category_count.items()}
         self.portal_names: dict[str, list[tuple[frozenset, str]]] = defaultdict(list)  # category -> (lemmas, dim)
         self.profile_dims: dict[tuple[str, str], set] = {}  # (category, product) -> dimensions of its portal cards
@@ -196,7 +200,8 @@ class ProductFit:
             strong = [c for c in self.vocab if c != category and self.vocab[c][w] >= MIN_FOREIGN_USES
                       and (uses == 0 or share <= FOREIGN_RATIO * self.vocab[c][w] / self.vocab_size[c])]
             others = sorted(strong if not weak else [c for c in self.vocab if c != category and uses <= MAX_OWN_USES
-                                                     and self.vocab[c][w] >= MIN_FOREIGN_USES and c not in strong])
+                                                     and self.vocab[c][w] >= MIN_WEAK_FOREIGN_USES
+                                                     and c not in strong])
             if others:
                 return t["text"], others
         return None
@@ -226,6 +231,8 @@ class ProductFit:
         profile = self.profile_dims.get((category, product))
         if profile is not None:  # enough cards of this very product to judge by
             return None if dim in profile else f"«{text}» — у товаров «{product}» не бывает такой характеристики"
+        if self.product_position_count[(category, product)] >= MIN_KTRU_POSITIONS:
+            return f"«{text}» — у товаров «{product}» не бывает такой характеристики"
         if dim not in self.category_dims.get(category, set()) \
                 and not any(d == dim and lemmas <= set(words) for lemmas, d in self.portal_names.get(category, [])):
             return f"«{text}» — у товаров категории «{category}» не бывает такой характеристики"
