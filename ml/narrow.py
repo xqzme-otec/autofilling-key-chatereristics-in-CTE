@@ -155,14 +155,16 @@ def narrow(characteristics: list[dict], candidates: list[dict], store: KtruStore
 
 
 def missing_required(remaining: list[dict], characteristics: list[dict], store: KtruStore, limit: int = 10) -> list[str]:
-    """Required KTRU characteristics of the remaining positions that the description does not specify."""
+    """Required KTRU characteristics that the description does not specify: of the final position when the
+    code is determined, otherwise only the ones every remaining position requires (needed whatever code
+    is chosen; the rest is covered by the clarifying question)."""
     filled = {f["name"] for f in characteristics if not f.get("conflict")}
     counts: dict[str, int] = {}
     for c in remaining:
         for ch in store.by_code[c["code"]]["characteristics"]:
             if ch["required"] and ch["name"] not in filled:
                 counts[ch["name"]] = counts.get(ch["name"], 0) + 1
-    return sorted(counts, key=lambda n: -counts[n])[:limit]
+    return [n for n in counts if counts[n] == len(remaining)][:limit]
 
 
 def _best_question(remaining: list[dict], filled: set, store: KtruStore):

@@ -26,12 +26,15 @@ from __future__ import annotations
     candidates       — оставшиеся коды КТРУ {code, name, score}, candidates_total — их число;
     errors           — {type, severity, message, ...}: nonexistent_value, out_of_range, unit_mismatch,
                        conflict, contradiction, product_not_found, invalid_input (severity=error);
-                       suspicious_value, multiple_values, portal_unknown_value, invalid_answer (warning);
+                       suspicious_value, multiple_values, portal_unknown_value, invalid_answer,
+                       missing_required (warning);
                        not_in_ktru (info) — признаки вне КТРУ, сохранённые как Портал / новые;
     next_step        — что спросить у пользователя (type: product | characteristic | code) или null;
     ktru, ktru_name  — итоговый код, когда он определён однозначно;
     steps            — как сужался список кодов (для отображения);
-    missing_required — обязательные характеристики КТРУ оставшихся позиций, которых нет в описании;
+    missing_required — обязательные характеристики КТРУ, которых нет в описании: у определённого кода —
+                       его собственные, пока кодов несколько — обязательные у всех оставшихся позиций;
+                       о них же предупреждение missing_required в errors;
     timings_ms       — время этапов.
 """
 import re
@@ -152,7 +155,7 @@ class Pipeline:
             for f in characteristics:
                 if f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars \
                         and not f.get("used_for_narrowing"):
-                    f["origin"] = "portal" if self.portal.has(category, f["name"]) else "new"
+                    f["origin"] = "portal" if self.portal.has(category, f["name"], product_intent) else "new"
                     if f.get("user_value"):  # a number: show it as the user wrote it, KTRU ranges do not apply
                         f["value"], f["unit"] = f["source"], None
             taken = [f["span"] for f in characteristics if f.get("span")] + \
@@ -192,6 +195,14 @@ class Pipeline:
                 e["message"] += " (позиция КТРУ определена неточно — уточните наименование товара)"
             e.setdefault("severity", "error")
         ktru = remaining[0] if len(remaining) == 1 and not not_found else None
+        # required KTRU characteristics the user did not give: a hint, the code is still determined without them
+        required = [] if not_found else missing_required(remaining, characteristics, self.store)
+        if required:
+            listed = ", ".join(f"«{name}»" for name in required)
+            errors.append({"type": "missing_required", "severity": "warning", "characteristics": required,
+                           "message": f"Вы не ввели обязательную характеристику товара: {listed}. Добавьте её в описание."
+                                      if len(required) == 1 else
+                                      f"Вы не ввели обязательные характеристики товара: {listed}. Добавьте их в описание."})
 
         return {
             "input": raw,
@@ -212,7 +223,7 @@ class Pipeline:
             "ktru": ktru["code"] if ktru else None,
             "ktru_name": ktru["name"] if ktru else None,
             "steps": steps,
-            "missing_required": [] if not_found or ktru else missing_required(remaining, characteristics, self.store),
+            "missing_required": required,
             "timings_ms": timings,
         }
 
@@ -239,7 +250,7 @@ class Pipeline:
         # numbers without a place among KTRU characteristics: «стол письменный высотой 75 см»
         for n in unmatched_numbers:
             phrase = f"{n['keyword']} {n['source']}" if n["keyword"] else n["source"]
-            found = self.portal.match(phrase, category)
+            found = self.portal.match(phrase, category, product_intent)
             if found:
                 item = {**found, "portal": True}
             else:
@@ -255,7 +266,7 @@ class Pipeline:
             return any(a < span[1] and span[0] < b for a, b in taken)
 
         for t in tokenize(text):
-            portal_value = self.portal.match(t["text"], category)
+            portal_value = self.portal.match(t["text"], category, product_intent)
             value_attribute = portal_value and portal_value["name"].lower().startswith(("цвет", "материал"))
             if not is_taken(t["span"]) and pos(t["text"]) in ("ADJF", "PRTF") \
                     and not value_attribute and self.portal.is_subtype(category, product_intent, t["lemma"]):
@@ -297,7 +308,7 @@ class Pipeline:
                 continue  # an attribute name without a readable value
             span = [g[0]["span"][0], g[-1]["span"][1]]
             phrase = text[span[0]:span[1]]
-            found = self.portal.match(phrase, category)
+            found = self.portal.match(phrase, category, product_intent)
             adjective = len(g) == 1 and pos(g[0]["text"]) in ("ADJF", "PRTF")
             value_attribute = found and found["name"].lower().startswith(("цвет", "материал"))
             subtype = adjective and not value_attribute and self.portal.is_subtype(category, product_intent, g[0]["lemma"])

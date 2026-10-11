@@ -8,6 +8,7 @@ from ml.values import ValueMatcher
 HAMMER = "25.73.30.141-MOCK0006"
 CHAIR = "31.01.11.150-MOCK0001"
 ARMCHAIR = "31.01.11.150-MOCK0002"
+STOOL = "31.01.12.160-MOCK0003"
 
 
 def store():
@@ -71,6 +72,15 @@ def test_missing_required():
     st = store()
     names = missing_required([{"code": CHAIR}], [{"name": "Материал обивки"}], st)
     assert "Наличие колесных опор" in names and "Материал обивки" not in names
+
+
+def test_missing_required_of_several_codes_is_what_all_of_them_require():
+    st = store()
+    both = missing_required([{"code": CHAIR}, {"code": ARMCHAIR}], [], st)
+    assert both == ["Наличие колесных опор", "Наличие подлокотников", "Материал обивки"]
+    # the chair and the stool require different things: whatever is still needed depends on the code
+    assert missing_required([{"code": CHAIR}, {"code": STOOL}], [], st) == []
+    assert missing_required([{"code": STOOL}], [], st) == ["Материал каркаса"]
 
 
 def test_to_nominative():

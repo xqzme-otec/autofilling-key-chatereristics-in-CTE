@@ -661,8 +661,10 @@ components:
         missing_required:
           type: array
           description: |
-            Обязательные характеристики КТРУ оставшихся позиций, которых нет в описании. Пусто,
-            когда код определён или товар не найден.
+            Обязательные характеристики КТРУ, которых нет в описании: когда код определён —
+            обязательные у этой позиции; пока кодов несколько — только обязательные у всех оставшихся
+            позиций. Пусто, если товар не найден. О них же в `errors` приходит предупреждение
+            `missing_required`.
           items:
             type: string
         next_step:
@@ -783,7 +785,7 @@ components:
             Вид замечания. Сейчас модель возвращает: `nonexistent_value`, `out_of_range`,
             `unit_mismatch`, `conflict`, `contradiction`, `product_not_found`, `invalid_input`,
             `suspicious_value`, `multiple_values`, `portal_unknown_value`, `invalid_answer`,
-            `not_in_ktru`. Список может расти — неизвестный вид показывайте по `severity`.
+            `missing_required`, `not_in_ktru`. Список может расти — неизвестный вид показывайте по `severity`.
         severity:
           type: string
           enum: [error, warning, info]

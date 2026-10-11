@@ -145,6 +145,16 @@ def test_dialog_reaches_final_code(client):
     assert any(ch["origin"] == "answer" for ch in r["characteristics"])
 
 
+def test_missing_required_hint_stays_when_the_code_is_determined(client):
+    first = analyze(client, "стол письменный")
+    r = analyze(client, "стол письменный", [answer_for(first["next_step"])])
+    assert r["ktru"] and r["missing_required"]
+    hints = [e for e in r["errors"] if e["type"] == "missing_required"]
+    assert len(hints) == 1 and hints[0]["severity"] == "warning"
+    assert all(name in hints[0]["message"] for name in r["missing_required"])
+    assert first["next_step"]["characteristic"] not in r["missing_required"]  # the answer filled it in
+
+
 def test_product_answer_narrows_candidates(client):
     first = analyze(client, "куртка мужская 48")
     q = first["next_step"]

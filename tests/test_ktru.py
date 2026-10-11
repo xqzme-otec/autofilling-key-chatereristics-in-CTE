@@ -32,6 +32,22 @@ def test_load_parquet_handles_missing_description(tmp_path):
     assert items["3"]["description"] == "Ударный инструмент"
 
 
+def test_load_parquet_skips_characteristics_that_are_not_actual(tmp_path):
+    def char(name, actual):
+        return {"name": name, "is_required": True, "actual": actual,
+                "values": [{"quality_description": "Сталь", "okei_name": None}]}
+
+    row = _row("1", None)
+    row["characteristics_json"] = json.dumps([char("Материал бойка", True), char("Форма бойка", False),
+                                              char("Тип", None)], ensure_ascii=False)
+    path = tmp_path / "ktru.parquet"
+    pd.DataFrame([row]).to_parquet(path)
+
+    names = [ch["name"] for ch in load_parquet(path)[0]["characteristics"]]
+
+    assert names == ["Материал бойка", "Тип"]  # no flag in the archive means actual
+
+
 @pytest.mark.skipif(not DEFAULT_PATH.exists(), reason="нет data/processed/ktru.parquet")
 def test_load_real_ktru():
     items = load_parquet(DEFAULT_PATH)

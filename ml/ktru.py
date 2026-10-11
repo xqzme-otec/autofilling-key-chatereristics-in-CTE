@@ -22,6 +22,8 @@ def _num(x) -> float | int | None:
 
 def _convert_char(c: dict) -> dict | None:
     """Характеристика из формата парсера ml/data → {name, required, unit, values}."""
+    if c.get("actual") is False:
+        return None  # помечена в архиве КТРУ как неактуальная
     values, unit = [], None
     for v in c["values"]:
         unit = unit or v.get("okei_name")
