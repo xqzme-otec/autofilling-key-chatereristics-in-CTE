@@ -46,8 +46,6 @@ __pycache__/
 # Downloaded datasets, generated indexes, and model weights
 data/raw/
 data/cache/
-data/processed/*
-!data/processed/ktru.parquet
 /datasets/
 /models/
 /artifacts/
@@ -66,3 +64,4 @@ Thumbs.db
 
 # Local test table for POST /api/v1/analyze/batch
 /test_products.csv
+/test_corner_cases.csv
