@@ -57,6 +57,7 @@ export default function App() {
   const [selectedBatchRow, setSelectedBatchRow] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const activeRequest = useRef<AbortController | null>(null)
+  const resultSection = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     try {
@@ -218,6 +219,14 @@ export default function App() {
     )
     setResult(item.result)
     setSelectedBatchRow(row)
+    window.requestAnimationFrame(() => {
+      resultSection.current?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+        block: "start",
+      })
+    })
   }
 
   return (
@@ -250,7 +259,7 @@ export default function App() {
           </div>
         )}
         {(loading || result) && (
-          <div className="workspace">
+          <div className="workspace" ref={resultSection}>
             <div className="workspace__main">
               <ClarifyingQuestion
                 loading={loading}

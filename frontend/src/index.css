@@ -159,7 +159,7 @@ fieldset { border: 0; min-width: 0; }
 .search-corrections__edit-row input { min-width: 180px; flex: 1; height: 34px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: #fff; }
 .search-corrections__edit-error { color: var(--red) !important; }
 
-.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 24px; align-items: start; margin-top: 24px; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 24px; align-items: start; margin-top: 24px; scroll-margin-top: 84px; }
 .workspace__main, .workspace__side { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
 .workspace__side { position: sticky; top: 96px; }
 .workspace__side .chars > .card__head { padding: 0 20px; }
