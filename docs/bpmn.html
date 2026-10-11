@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BPMN-схема сервиса</title>
+<meta name="description" content="Схема реализации сервиса автозаполнения характеристик СТЕ в нотации BPMN 2.0: общий процесс и подпроцесс анализа описания.">
+<style>
+:root {
+  --bg: #f4f6f9; --surface: #ffffff; --text: #1d2433; --muted: #5b6475; --border: #dde2ea;
+  --pool: #2b3446; --band: #eef1f6; --lane-line: #c3cad6;
+  --task-bg: #eaf2ff; --task-stroke: #2f6fdb;
+  --sub-bg: #f1edff; --sub-stroke: #6a4fd1;
+  --gw-bg: #fff5dc; --gw-stroke: #b67c00;
+  --start: #1d9150; --end: #cc3439; --mid: #2f6fdb;
+  --flow: #3a4356; --msg: #6b7489; --assoc: #8a93a6;
+  --store-bg: #ffffff; --store-stroke: #4a5568; --frame: #f8f6ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11141a; --surface: #191e27; --text: #e6e9ef; --muted: #9aa3b5; --border: #2c3442;
+    --pool: #aab4c8; --band: #212834; --lane-line: #3a4350;
+    --task-bg: #1b2a44; --task-stroke: #6ea0ff;
+    --sub-bg: #261f42; --sub-stroke: #a48cff;
+    --gw-bg: #372c10; --gw-stroke: #e0a92a;
+    --start: #3ecf7d; --end: #ff6b6f; --mid: #6ea0ff;
+    --flow: #c3cad8; --msg: #9aa3b5; --assoc: #7d879a;
+    --store-bg: #191e27; --store-stroke: #aab4c8; --frame: #1c1a2b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11141a; --surface: #191e27; --text: #e6e9ef; --muted: #9aa3b5; --border: #2c3442;
+  --pool: #aab4c8; --band: #212834; --lane-line: #3a4350;
+  --task-bg: #1b2a44; --task-stroke: #6ea0ff;
+  --sub-bg: #261f42; --sub-stroke: #a48cff;
+  --gw-bg: #372c10; --gw-stroke: #e0a92a;
+  --start: #3ecf7d; --end: #ff6b6f; --mid: #6ea0ff;
+  --flow: #c3cad8; --msg: #9aa3b5; --assoc: #7d879a;
+  --store-bg: #191e27; --store-stroke: #aab4c8; --frame: #1c1a2b;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.55 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; }
+main { max-width: 1360px; margin: 0 auto; padding: 32px 16px 48px; }
+h1 { margin: 0 0 6px; font-size: 26px; line-height: 1.25; }
+h2 { margin: 36px 0 6px; font-size: 19px; }
+p { margin: 0 0 10px; max-width: 900px; }
+.lead { color: var(--muted); }
+figure { margin: 14px 0 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; }
+figure svg { display: block; width: 100%; height: auto; min-width: 960px; }
+ol { margin: 8px 0 0; padding-left: 22px; max-width: 900px; }
+ol li { margin: 4px 0; }
+.legend { list-style: none; margin: 12px 0 0; padding: 0; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px 18px; }
+.legend li { display: flex; align-items: center; gap: 12px; }
+.legend svg { flex: none; }
+.legend span { display: flex; flex-direction: column; line-height: 1.3; }
+.legend small { color: var(--muted); font-size: 13px; }
+
+svg text { font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; fill: var(--text); }
+.t { font-size: 12px; }
+.lbl { font-size: 11px; fill: var(--muted); }
+.b { font-weight: 600; font-size: 12.5px; }
+.sm { font-size: 11px; fill: var(--muted); }
+.mod { font-size: 10.5px; fill: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.pool { fill: none; stroke: var(--pool); stroke-width: 1.4; }
+.band { fill: var(--band); stroke: var(--pool); stroke-width: 1.4; }
+.lane { fill: none; stroke: var(--lane-line); stroke-width: 1; }
+.lband { fill: var(--band); stroke: var(--lane-line); stroke-width: 1; }
+.frame { fill: var(--frame); stroke: var(--sub-stroke); stroke-width: 1.5; }
+.task { fill: var(--task-bg); stroke: var(--task-stroke); stroke-width: 1.5; }
+.sub { fill: var(--sub-bg); stroke: var(--sub-stroke); stroke-width: 1.5; }
+.plus { fill: var(--surface); stroke: var(--sub-stroke); stroke-width: 1.2; }
+.plusl { stroke: var(--sub-stroke); stroke-width: 1.4; }
+.gw { fill: var(--gw-bg); stroke: var(--gw-stroke); stroke-width: 1.5; }
+.gwx { stroke: var(--gw-stroke); stroke-width: 2.2; stroke-linecap: round; }
+.ev-start { fill: var(--surface); stroke: var(--start); stroke-width: 2; }
+.ev-end { fill: var(--surface); stroke: var(--end); stroke-width: 4; }
+.ev-mid { fill: var(--surface); stroke: var(--mid); stroke-width: 1.5; }
+.env { fill: none; stroke: var(--mid); stroke-width: 1.3; stroke-linejoin: round; }
+.seq { fill: none; stroke: var(--flow); stroke-width: 1.5; stroke-linejoin: round; }
+.msg { fill: none; stroke: var(--msg); stroke-width: 1.3; stroke-dasharray: 6 4; }
+.assoc { fill: none; stroke: var(--assoc); stroke-width: 1.3; stroke-dasharray: 2 4; }
+.store { fill: var(--store-bg); stroke: var(--store-stroke); stroke-width: 1.4; }
+.storel { fill: none; stroke: var(--store-stroke); stroke-width: 1; }
+.annot { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.mk-seq { fill: var(--flow); }
+.mk-msg { fill: var(--surface); stroke: var(--msg); stroke-width: 1; }
+.mk-assoc { fill: none; stroke: var(--assoc); stroke-width: 1.3; }
+@media print { body { background: #fff; } figure { border: 0; overflow: visible; } figure svg { min-width: 0; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Схема реализации в нотации BPMN</h1>
+<p class="lead">Сервис автозаполнения ключевых характеристик СТЕ: от свободного описания товара до конечного кода КТРУ. Нотация BPMN 2.0, схема соответствует коду репозитория.</p>
+
+<h2>1. Общий процесс</h2>
+<p>Участники — пользователь и сервис. Сервис разбит на дорожки по компонентам: интерфейс, агрегатор, модель. Пунктир — сообщения между пользователем и интерфейсом, сплошные стрелки — порядок шагов, точки — работа с хранилищами данных.</p>
+<figure>
+<svg viewBox="0 0 1300 880" width="1300" height="880" role="img" aria-label="BPMN: общий процесс — пользователь, интерфейс, агрегатор, модель"><defs>
+<marker id="o-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="o-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="o-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="o-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><rect class="pool" x="20" y="20" width="1260" height="210"/><rect class="band" x="20" y="20" width="34" height="210"/><g transform="translate(37 125) rotate(-90)"><text class="t" text-anchor="middle"><tspan x="0" y="-3.1" class="b">Пользователь</tspan><tspan x="0" y="11.4" class="sm">поставщик или заказчик</tspan></text></g><rect class="pool" x="20" y="250" width="1260" height="490"/><rect class="band" x="20" y="250" width="34" height="490"/><g transform="translate(37 495) rotate(-90)"><text class="t" text-anchor="middle"><tspan x="0" y="-3.1" class="b">Сервис автозаполнения</tspan><tspan x="0" y="11.4" class="sm">характеристик СТЕ</tspan></text></g><rect class="lane" x="54" y="250" width="1226" height="150"/><rect class="lband" x="54" y="250" width="36" height="150"/><g transform="translate(72 325) rotate(-90)"><text class="t" text-anchor="middle"><tspan x="0" y="-3.1" class="b">Интерфейс</tspan><tspan x="0" y="11.4" class="sm">frontend · React</tspan></text></g><rect class="lane" x="54" y="400" width="1226" height="160"/><rect class="lband" x="54" y="400" width="36" height="160"/><g transform="translate(72 480) rotate(-90)"><text class="t" text-anchor="middle"><tspan x="0" y="-3.1" class="b">Агрегатор</tspan><tspan x="0" y="11.4" class="sm">backend · Go</tspan></text></g><rect class="lane" x="54" y="560" width="1226" height="180"/><rect class="lband" x="54" y="560" width="36" height="180"/><g transform="translate(72 650) rotate(-90)"><text class="t" text-anchor="middle"><tspan x="0" y="-3.1" class="b">Модель</tspan><tspan x="0" y="11.4" class="sm">ML · Python, CPU</tspan></text></g><path class="seq" d="M132 100L170 100" marker-end="url(#o-a)"/><path class="seq" d="M310 100L780 100" marker-end="url(#o-a)"/><path class="seq" d="M920 100L950 100" marker-end="url(#o-a)"/><path class="seq" d="M1000 100L1100 100" marker-end="url(#o-a)"/><path class="seq" d="M975 125L975 190L1043 190" marker-end="url(#o-a)"/><path class="seq" d="M975 75L975 38L240 38L240 68" marker-end="url(#o-a)"/><path class="seq" d="M1130 132L1130 150L880 150L880 132" marker-end="url(#o-a)"/><path class="msg" d="M240 132L240 293" marker-start="url(#o-ms)" marker-end="url(#o-me)"/><path class="msg" d="M820 293L820 132" marker-start="url(#o-ms)" marker-end="url(#o-me)"/><path class="msg" d="M1210 132L1210 262L1048 262L1048 309" marker-start="url(#o-ms)" marker-end="url(#o-me)"/><path class="seq" d="M920 325L950 325" marker-end="url(#o-a)"/><path class="seq" d="M1000 325L1032 325" marker-end="url(#o-a)"/><path class="seq" d="M975 350L975 378L1035 378" marker-end="url(#o-a)"/><path class="seq" d="M1064 325L1100 325" marker-end="url(#o-a)"/><path class="seq" d="M240 357L240 438" marker-end="url(#o-a)"/><path class="seq" d="M310 470L350 470" marker-end="url(#o-a)"/><path class="seq" d="M390 502L390 595" marker-end="url(#o-a)"/><path class="seq" d="M700 650L850 650L850 502" marker-end="url(#o-a)"/><path class="seq" d="M850 438L850 357" marker-end="url(#o-a)"/><path class="seq" d="M1170 357L1170 438" marker-end="url(#o-a)"/><path class="seq" d="M1170 502L1170 540L460 540L460 502" marker-end="url(#o-a)"/><path class="assoc" d="M920 470L990 470" marker-end="url(#o-aa)"/><path class="assoc" d="M1100 470L1030 470" marker-end="url(#o-aa)" marker-start="url(#o-aa)"/><path class="assoc" d="M400 790L400 705" marker-end="url(#o-aa)"/><path class="assoc" d="M560 790L560 705" marker-end="url(#o-aa)"/><path class="assoc" d="M680 790L680 705" marker-end="url(#o-aa)" marker-start="url(#o-aa)"/><circle class="ev-start" cx="115" cy="100" r="17"/><text class="lbl" text-anchor="middle"><tspan x="115" y="136.4">Нужно описать</tspan><tspan x="115" y="149.4">товар</tspan></text><rect class="task" x="170" y="68" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="240" y="90.2">Ввести описание</tspan><tspan x="240" y="104.2">товара или</tspan><tspan x="240" y="118.2">загрузить таблицу</tspan></text><rect class="task" x="780" y="68" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="850" y="90.2">Изучить результат:</tspan><tspan x="850" y="104.2">характеристики,</tspan><tspan x="850" y="118.2">ошибки, сужение</tspan></text><polygon class="gw" points="975,75 1000,100 975,125 950,100"/><path class="gwx" d="M967 92L983 108M983 92L967 108"/><text class="lbl" text-anchor="start"><tspan x="1006" y="73.9">Что дальше?</tspan></text><rect class="task" x="1100" y="68" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="1170" y="90.2">Выбрать ответ</tspan><tspan x="1170" y="104.2">на уточняющий</tspan><tspan x="1170" y="118.2">вопрос</tspan></text><circle class="ev-end" cx="1060" cy="190" r="17"/><text class="lbl" text-anchor="middle"><tspan x="1060" y="224.9">Код КТРУ получен</tspan></text><text class="lbl" text-anchor="middle"><tspan x="1050" y="94.9">есть вопрос</tspan></text><text class="lbl" text-anchor="end"><tspan x="968" y="175.9">код определён</tspan></text><text class="lbl" text-anchor="middle"><tspan x="600" y="33.9">нужно исправить описание или характеристику</tspan></text><text class="lbl" text-anchor="start"><tspan x="248" y="193.9">описание</tspan></text><text class="lbl" text-anchor="start"><tspan x="828" y="193.9">результат</tspan></text><text class="lbl" text-anchor="start"><tspan x="1216" y="203.9">ответ</tspan></text><rect class="task" x="170" y="293" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="240" y="322.2">Отправить описание</tspan><tspan x="240" y="336.2">в агрегатор</tspan></text><rect class="task" x="780" y="293" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="850" y="308.2">Показать категорию,</tspan><tspan x="850" y="322.2">характеристики,</tspan><tspan x="850" y="336.2">ошибки, сужение,</tspan><tspan x="850" y="350.2">вопрос</tspan></text><polygon class="gw" points="975,300 1000,325 975,350 950,325"/><path class="gwx" d="M967 317L983 333M983 317L967 333"/><text class="lbl" text-anchor="middle"><tspan x="975" y="294.9">Есть вопрос?</tspan></text><circle class="ev-mid" cx="1048" cy="325" r="16"/><circle class="ev-mid" cx="1048" cy="325" r="12.5"/><rect class="env" x="1041" y="320" width="14" height="10"/><path class="env" d="M1041 320L1048 326L1055 320"/><text class="lbl" text-anchor="middle"><tspan x="1048" y="357.9">ждём ответ</tspan></text><circle class="ev-end" cx="1048" cy="378" r="13"/><text class="lbl" text-anchor="start"><tspan x="1068" y="381.9">итог показан</tspan></text><text class="lbl" text-anchor="middle"><tspan x="1016" y="319.9">да</tspan></text><text class="lbl" text-anchor="start"><tspan x="982" y="371.9">нет</tspan></text><rect class="task" x="1100" y="293" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="1170" y="322.2">Отправить</tspan><tspan x="1170" y="336.2">выбранный ответ</tspan></text><rect class="task" x="170" y="438" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="240" y="467.2">Проверить текст,</tspan><tspan x="240" y="481.2">создать сессию</tspan></text><rect class="task" x="350" y="438" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="420" y="467.2">Вызвать модель:</tspan><tspan x="420" y="481.2">текст и все ответы</tspan></text><rect class="task" x="780" y="438" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="850" y="467.2">Сохранить результат</tspan><tspan x="850" y="481.2">и вопрос в сессии</tspan></text><path class="store" d="M990 456L990 484A20 6 0 0 0 1030 484L1030 456"/><ellipse class="store" cx="1010" cy="456" rx="20" ry="6"/><path class="storel" d="M990 462A20 6 0 0 0 1030 462M990 468A20 6 0 0 0 1030 468"/><text class="lbl" text-anchor="middle"><tspan x="1010" y="509.9">Redis: сессии</tspan></text><rect class="task" x="1100" y="438" width="140" height="64" rx="9"/><text class="t" text-anchor="middle"><tspan x="1170" y="460.2">Проверить ответ,</tspan><tspan x="1170" y="474.2">добавить его</tspan><tspan x="1170" y="488.2">в сессию</tspan></text><text class="lbl" text-anchor="middle"><tspan x="1000" y="535.9">новый вызов модели с ответами</tspan></text><rect class="sub" x="350" y="595" width="350" height="110" rx="10"/><text class="t" text-anchor="middle"><tspan x="525" y="625.2" class="b">Анализ описания (ML-пайплайн)</tspan><tspan x="525" y="638.9" class="sm">исправления · поиск КТРУ ·</tspan><tspan x="525" y="652.9" class="sm">характеристики · сужение ·</tspan><tspan x="525" y="666.9" class="sm">Портал и новые · ошибки · вопрос</tspan></text><rect class="plus" x="518" y="688" width="14" height="14" rx="2"/><path class="plusl" d="M521 695h8M525 691v8"/><path class="annot" d="M910 612h-10v76h10"/><text class="lbl" text-anchor="start"><tspan x="912" y="640.9">Подробно — подпроцесс на схеме 2.</tspan><tspan x="912" y="653.9">Модель не хранит диалог: каждый вызов</tspan><tspan x="912" y="666.9">получает текст и все ответы пользователя.</tspan></text><path class="store" d="M378 796L378 824A22 6 0 0 0 422 824L422 796"/><ellipse class="store" cx="400" cy="796" rx="22" ry="6"/><path class="storel" d="M378 802A22 6 0 0 0 422 802M378 808A22 6 0 0 0 422 808"/><text class="lbl" text-anchor="middle"><tspan x="400" y="847.4">Справочник КТРУ</tspan><tspan x="400" y="860.4">и эмбеддинги</tspan></text><path class="store" d="M538 796L538 824A22 6 0 0 0 582 824L582 796"/><ellipse class="store" cx="560" cy="796" rx="22" ry="6"/><path class="storel" d="M538 802A22 6 0 0 0 582 802M538 808A22 6 0 0 0 582 808"/><text class="lbl" text-anchor="middle"><tspan x="560" y="847.4">Словарь Портала,</tspan><tspan x="560" y="860.4">классификатор</tspan></text><path class="store" d="M658 796L658 824A22 6 0 0 0 702 824L702 796"/><ellipse class="store" cx="680" cy="796" rx="22" ry="6"/><path class="storel" d="M658 802A22 6 0 0 0 702 802M658 808A22 6 0 0 0 702 808"/><text class="lbl" text-anchor="middle"><tspan x="680" y="847.4">Postgres: новые</tspan><tspan x="680" y="860.4">характеристики</tspan></text></svg>
+</figure>
+
+<h2>2. Подпроцесс «Анализ описания»</h2>
+<p>Что делает модель за один вызов. Кандидат КТРУ отбрасывается только при прямом противоречии справочнику. Признаки вне КТРУ не теряются: сначала ищутся на Портале, иначе становятся новыми; в карточку не попадает только то, что товару не подходит, — с объяснением причины.</p>
+<figure>
+<svg viewBox="0 0 1260 560" width="1260" height="560" role="img" aria-label="BPMN: подпроцесс анализа описания в модельном сервисе"><defs>
+<marker id="p-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="p-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="p-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="p-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><rect class="frame" x="20" y="20" width="1220" height="520" rx="14"/><text class="t" text-anchor="start"><tspan x="40" y="48.2" class="b">Подпроцесс «Анализ описания»</tspan></text><text class="lbl" text-anchor="start"><tspan x="40" y="65.9">модельный сервис: ml/pipeline.py, затем ml/service/analysis.py</tspan></text><path class="seq" d="M88 190L110 190" marker-end="url(#p-a)"/><path class="seq" d="M250 190L290 190" marker-end="url(#p-a)"/><path class="seq" d="M430 190L466 190" marker-end="url(#p-a)"/><path class="seq" d="M514 190L550 190" marker-end="url(#p-a)"/><path class="seq" d="M690 190L730 190" marker-end="url(#p-a)"/><path class="seq" d="M870 190L910 190" marker-end="url(#p-a)"/><path class="seq" d="M1050 190L1100 190L1100 400L1050 400" marker-end="url(#p-a)"/><path class="seq" d="M490 214L490 290L980 290L980 365" marker-end="url(#p-a)"/><path class="seq" d="M910 400L864 400" marker-end="url(#p-a)"/><path class="seq" d="M840 376L840 340L740 340" marker-end="url(#p-a)"/><path class="seq" d="M816 400L740 400" marker-end="url(#p-a)"/><path class="seq" d="M840 424L840 460L740 460" marker-end="url(#p-a)"/><path class="seq" d="M600 340L540 340L540 376" marker-end="url(#p-a)"/><path class="seq" d="M600 400L564 400" marker-end="url(#p-a)"/><path class="seq" d="M600 460L540 460L540 424" marker-end="url(#p-a)"/><path class="seq" d="M516 400L480 400" marker-end="url(#p-a)"/><path class="seq" d="M340 400L286 400" marker-end="url(#p-a)"/><path class="assoc" d="M405 115L360 155" marker-end="url(#p-aa)"/><path class="assoc" d="M425 115L610 155" marker-end="url(#p-aa)"/><path class="assoc" d="M438 115L790 155" marker-end="url(#p-aa)"/><path class="assoc" d="M980 115L980 155" marker-end="url(#p-aa)"/><path class="assoc" d="M410 440L410 470" marker-end="url(#p-aa)" marker-start="url(#p-aa)"/><circle class="ev-start" cx="72" cy="190" r="16"/><text class="lbl" text-anchor="middle"><tspan x="72" y="223.4">Текст</tspan><tspan x="72" y="236.4">и ответы</tspan></text><rect class="task" x="110" y="155" width="140" height="70" rx="9"/><text class="t" text-anchor="middle"><tspan x="180" y="173.2">Нормализация,</tspan><tspan x="180" y="187.2">опечатки,</tspan><tspan x="180" y="201.2">раскладка</tspan><tspan x="180" y="214.7" class="mod">ml/correct.py</tspan></text><rect class="task" x="290" y="155" width="140" height="70" rx="9"/><text class="t" text-anchor="middle"><tspan x="360" y="173.2">Поиск кандидатов</tspan><tspan x="360" y="187.2">КТРУ по смыслу</tspan><tspan x="360" y="201.2">(e5-small)</tspan><tspan x="360" y="214.7" class="mod">ml/search.py</tspan></text><polygon class="gw" points="490,166 514,190 490,214 466,190"/><path class="gwx" d="M482 182L498 198M498 182L482 198"/><text class="lbl" text-anchor="middle"><tspan x="490" y="160.9">Товар найден?</tspan></text><text class="lbl" text-anchor="middle"><tspan x="532" y="184.9">да</tspan></text><rect class="task" x="550" y="155" width="140" height="70" rx="9"/><text class="t" text-anchor="middle"><tspan x="620" y="173.2">Характеристики</tspan><tspan x="620" y="187.2">КТРУ: значения,</tspan><tspan x="620" y="201.2">единицы, диапазоны</tspan><tspan x="620" y="214.7" class="mod">values · units · sizes</tspan></text><rect class="task" x="730" y="155" width="140" height="70" rx="9"/><text class="t" text-anchor="middle"><tspan x="800" y="173.2">Сужение</tspan><tspan x="800" y="187.2">кандидатов: только</tspan><tspan x="800" y="201.2">при противоречии</tspan><tspan x="800" y="214.7" class="mod">ml/narrow.py</tspan></text><rect class="task" x="910" y="155" width="140" height="70" rx="9"/><text class="t" text-anchor="middle"><tspan x="980" y="173.2">Признаки вне КТРУ:</tspan><tspan x="980" y="187.2">Портал → новые;</tspan><tspan x="980" y="201.2">бренды, нечитаемое</tspan><tspan x="980" y="214.7" class="mod">ml/portal.py</tspan></text><text class="lbl" text-anchor="start"><tspan x="500" y="284.9">нет: товар не найден</tspan></text><path class="store" d="M398 81L398 109A22 6 0 0 0 442 109L442 81"/><ellipse class="store" cx="420" cy="81" rx="22" ry="6"/><path class="storel" d="M398 87A22 6 0 0 0 442 87M398 93A22 6 0 0 0 442 93"/><text class="lbl" text-anchor="start"><tspan x="452" y="92.4">Справочник КТРУ</tspan><tspan x="452" y="105.4">и эмбеддинги</tspan></text><path class="store" d="M958 81L958 109A22 6 0 0 0 1002 109L1002 81"/><ellipse class="store" cx="980" cy="81" rx="22" ry="6"/><path class="storel" d="M958 87A22 6 0 0 0 1002 87M958 93A22 6 0 0 0 1002 93"/><text class="lbl" text-anchor="start"><tspan x="1012" y="92.4">Словарь Портала</tspan><tspan x="1012" y="105.4">(выгрузки СТЕ)</tspan></text><rect class="task" x="910" y="365" width="140" height="70" rx="9"/><text class="t" text-anchor="middle"><tspan x="980" y="383.2">Ошибки с причиной</tspan><tspan x="980" y="397.2">и недостающие</tspan><tspan x="980" y="411.2">обязательные</tspan><tspan x="980" y="425.2">характеристики</tspan></text><polygon class="gw" points="840,376 864,400 840,424 816,400"/><path class="gwx" d="M832 392L848 408M848 392L832 408"/><text class="lbl" text-anchor="start"><tspan x="870" y="449.4">Сколько кодов</tspan><tspan x="870" y="462.4">осталось?</tspan></text><text class="lbl" text-anchor="middle"><tspan x="790" y="335.9">один код</tspan></text><text class="lbl" text-anchor="middle"><tspan x="778" y="394.9">несколько</tspan></text><text class="lbl" text-anchor="middle"><tspan x="790" y="455.9">ни одного</tspan></text><rect class="task" x="600" y="315" width="140" height="50" rx="9"/><text class="t" text-anchor="middle"><tspan x="670" y="344.2">Итоговый код КТРУ</tspan></text><rect class="task" x="600" y="375" width="140" height="50" rx="9"/><text class="t" text-anchor="middle"><tspan x="670" y="391.2">Уточняющий вопрос</tspan><tspan x="670" y="404.2">о товаре, признаке</tspan><tspan x="670" y="417.2">или коде</tspan></text><rect class="task" x="600" y="435" width="140" height="50" rx="9"/><text class="t" text-anchor="middle"><tspan x="670" y="457.7">«Товар не найден»,</tspan><tspan x="670" y="470.7">ближайшие позиции</tspan></text><polygon class="gw" points="540,376 564,400 540,424 516,400"/><path class="gwx" d="M532 392L548 408M548 392L532 408"/><rect class="task" x="340" y="360" width="140" height="80" rx="9"/><text class="t" text-anchor="middle"><tspan x="410" y="377.2">Подходит ли</tspan><tspan x="410" y="390.7">товару: правила</tspan><tspan x="410" y="404.2">и классификатор;</tspan><tspan x="410" y="417.7">запомнить новые</tspan><tspan x="410" y="430.7" class="mod">ml/service</tspan></text><circle class="ev-end" cx="270" cy="400" r="16"/><text class="lbl" text-anchor="middle"><tspan x="270" y="433.4">Ответ</tspan><tspan x="270" y="446.4">агрегатору</tspan></text><path class="store" d="M388 476L388 504A22 6 0 0 0 432 504L432 476"/><ellipse class="store" cx="410" cy="476" rx="22" ry="6"/><path class="storel" d="M388 482A22 6 0 0 0 432 482M388 488A22 6 0 0 0 432 488"/><text class="lbl" text-anchor="start"><tspan x="442" y="487.4">Postgres: новые</tspan><tspan x="442" y="500.4">характеристики</tspan></text></svg>
+</figure>
+
+<h2>Основной путь</h2>
+<ol>
+<li>Пользователь вводит описание товара или загружает таблицу; интерфейс отправляет его в агрегатор.</li>
+<li>Агрегатор проверяет текст, создаёт сессию в Redis и вызывает модель с текстом и всеми ответами.</li>
+<li>Модель исправляет опечатки, находит позиции КТРУ, извлекает характеристики и сужает список кодов.</li>
+<li>Интерфейс показывает категорию, характеристики с источником, ошибки с подсказками и ход сужения.</li>
+<li>Если кодов несколько, пользователь отвечает на уточняющий вопрос, и анализ повторяется с ответом. Если нужно исправить описание, запускается новый анализ.</li>
+<li>Когда остаётся один код, процесс завершён: код КТРУ и унифицированные характеристики получены.</li>
+</ol>
+
+<h2>Обозначения</h2>
+<ul class="legend">
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l1-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l1-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l1-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l1-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><circle class="ev-start" cx="28" cy="18" r="12"/></svg><span><b>Начальное событие</b><small>процесс начинается</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l2-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l2-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l2-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l2-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><circle class="ev-end" cx="28" cy="18" r="12"/></svg><span><b>Конечное событие</b><small>процесс завершён</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l3-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l3-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l3-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l3-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><circle class="ev-mid" cx="28" cy="18" r="13"/><circle class="ev-mid" cx="28" cy="18" r="9.5"/><rect class="env" x="21" y="13" width="14" height="10"/><path class="env" d="M21 13L28 19L35 13"/></svg><span><b>Ожидание сообщения</b><small>интерфейс ждёт ответа пользователя</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l4-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l4-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l4-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l4-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><rect class="task" x="4" y="6" width="48" height="24" rx="6"/></svg><span><b>Задача</b><small>один шаг работы</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l5-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l5-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l5-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l5-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><rect class="sub" x="4" y="4" width="48" height="28" rx="6"/><rect class="plus" x="23" y="21" width="10" height="10" rx="2"/><path class="plusl" d="M25 26h6M28 23v6"/></svg><span><b>Свёрнутый подпроцесс</b><small>раскрыт на схеме 2</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l6-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l6-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l6-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l6-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><polygon class="gw" points="28,4 42,18 28,32 14,18"/><path class="gwx" d="M20 10L36 26M36 10L20 26"/></svg><span><b>Исключающий шлюз</b><small>выбирается ровно один путь</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l7-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l7-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l7-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l7-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><path class="seq" d="M4 18L52 18" marker-end="url(#l7-a)"/></svg><span><b>Поток управления</b><small>порядок шагов</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l8-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l8-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l8-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l8-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><path class="msg" d="M6 18L52 18" marker-start="url(#l8-ms)" marker-end="url(#l8-me)"/></svg><span><b>Поток сообщений</b><small>между пользователем и сервисом</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l9-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l9-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l9-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l9-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><path class="store" d="M13 10L13 26A15 6 0 0 0 43 26L43 10"/><ellipse class="store" cx="28" cy="10" rx="15" ry="6"/><path class="storel" d="M13 16A15 6 0 0 0 43 16M13 22A15 6 0 0 0 43 22"/></svg><span><b>Хранилище данных</b><small>Redis, Postgres, справочники</small></span></li>
+<li><svg viewBox="0 0 56 36" width="56" height="36" aria-hidden="true"><defs>
+<marker id="l10-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-seq" d="M0 0L10 5L0 10z"/></marker>
+<marker id="l10-me" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="mk-msg" d="M0.6 0.8L9.4 5L0.6 9.2z"/></marker>
+<marker id="l10-ms" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle class="mk-msg" cx="5" cy="5" r="4"/></marker>
+<marker id="l10-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-assoc" d="M1 1L9 5L1 9"/></marker>
+</defs><path class="assoc" d="M4 18L52 18" marker-end="url(#l10-aa)"/></svg><span><b>Связь с данными</b><small>чтение или запись</small></span></li>
+</ul>
+</main>
+</body>
+</html>
