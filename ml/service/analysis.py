@@ -53,6 +53,7 @@ class AnalysisService:
         self._fit: ProductFit | None = None
         self._classifier: NewCharClassifier | None = None
         self._classifier_tried = False
+        self._classifier_failed = False
         self._fit_lock = threading.Lock()
 
     def analyze(self, request: dict[str, Any]) -> dict:
@@ -71,6 +72,22 @@ class AnalysisService:
         """Loads the rules and the classifier ahead of the first request (they need the loaded pipeline)."""
         if self._product_fit() is not None:
             self._new_char_classifier()
+
+    def classifier_status(self) -> str:
+        """Public readiness state without exposing the local artifact path."""
+        if self.holder.status == "failed":
+            return "load_failed"
+        if self.holder.status != "ready":
+            return "loading"
+        if not self._classifier_tried:
+            pipeline = self.holder.pipeline
+            if getattr(pipeline, "store", None) is None \
+                    or getattr(getattr(pipeline, "searcher", None), "model", None) is None:
+                return "rules_only"
+            return "loading" if self.classifier_path.exists() else "rules_only"
+        if self._classifier is not None:
+            return "loaded"
+        return "load_failed" if self._classifier_failed else "rules_only"
 
     def _product_fit(self) -> ProductFit | None:
         """Built once from the loaded pipeline's KTRU store; None for a pipeline without one (tests)."""
@@ -100,6 +117,7 @@ class AnalysisService:
                                 self._classifier = NewCharClassifier(encoder, store, self.classifier_path,
                                                                      fit=self._fit)
                             except Exception:
+                                self._classifier_failed = True
                                 logger.exception("newchar classifier failed to load: rules only")
                     self._classifier_tried = True
         return self._classifier

@@ -1,0 +1,18 @@
+{"id":"clean-chair","text":"стул ученический, ростовая группа 5","expected_errors":[]}
+{"id":"clean-table","text":"стол письменный деревянный","expected_errors":[]}
+{"id":"clean-hammer","text":"молоток слесарный","expected_errors":[]}
+{"id":"clean-coat","text":"халат медицинский белый","expected_errors":[]}
+{"id":"clean-dress","text":"платье черное женское","expected_errors":[]}
+{"id":"typo-chair","text":"стл на металлическом каркасе, без подлокотников","expected_errors":[],"expected_corrections":[{"from":"стл","to":"стул"}]}
+{"id":"typo-dress","text":"плате чернные","expected_errors":[],"expected_corrections":[{"from":"плате","to":"платье"},{"from":"чернные","to":"черные"}]}
+{"id":"unit-hammer","text":"молоток, длина рукоятки 2 кг","expected_errors":["unit_mismatch"]}
+{"id":"suspicious-hammer","text":"молоток массой 50 кг","expected_errors":["suspicious_value"]}
+{"id":"suspicious-table","text":"стол высотой 5 метров","expected_errors":["suspicious_value"]}
+{"id":"value-chair","text":"стул офисный, материал обивки алмазный","expected_errors":["nonexistent_value"]}
+{"id":"value-hammer","text":"молоток с деревянным бойком","expected_errors":["nonexistent_value"]}
+{"id":"foreign-clothes","text":"футболка мужская, мощность 800 Вт","expected_errors":["not_fitting_characteristic"]}
+{"id":"foreign-furniture","text":"стол, объем двигателя 2 л","expected_errors":["not_fitting_characteristic"]}
+{"id":"unreadable-table","text":"стол, ыврпаоы","expected_errors":["unreadable_fragment"]}
+{"id":"missing-value-cabinet","text":"шкаф, материал изготовления","expected_errors":["missing_value"]}
+{"id":"unknown-product","text":"ноутбук игровой","expected_errors":["product_not_found"]}
+{"id":"contradiction-chair","text":"стул с подлокотниками без подлокотников","expected_errors":["contradiction"]}

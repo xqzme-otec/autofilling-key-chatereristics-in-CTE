@@ -212,7 +212,12 @@ def test_unreachable_postgres_degrades(caplog):
     caplog.set_level(logging.INFO)
     with client(result_with("инструменты", "Противоскользящая рукоятка"),
                 NewCharacteristicsRepository(UNREACHABLE_DSN)) as c:
-        assert c.get("/health").json() == {"status": "degraded", "pipeline": "ready", "postgres": "unavailable"}
+        assert c.get("/health").json() == {
+            "status": "degraded",
+            "pipeline": "ready",
+            "postgres": "unavailable",
+            "newchar_classifier": "rules_only",
+        }
         assert c.get("/ready").status_code == 200  # Postgres is optional: the service stays ready
         for _ in range(2):  # the second request skips Postgres without waiting for a connection
             chars = new_characteristics(c, "молоток, противоскользящая рукоятка")
