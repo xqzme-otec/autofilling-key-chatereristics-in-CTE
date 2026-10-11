@@ -1,4 +1,5 @@
-import type { AnalysisResult, Correction } from "./api"
+import { useState } from "react"
+import type { AnalysisResult, Characteristic, Correction } from "./api"
 import { Button, Card, Icon, Spinner, Status } from "./ui"
 
 function normalizedName(name: string): string {
@@ -26,6 +27,25 @@ function errorLabel(severity: string | undefined) {
   return "Ошибка в описании"
 }
 
+function correctionHint(type: string): string {
+  if (["unit_mismatch", "out_of_range", "nonexistent_value", "suspicious_value"].includes(type))
+    return "Проверьте значение и единицу измерения в описании товара, затем повторите поиск."
+  if (["conflict", "contradiction", "multiple_values"].includes(type))
+    return "Оставьте для этой характеристики одно верное значение и повторите поиск."
+  if (type === "unreadable_fragment")
+    return "Напишите этот фрагмент понятными словами и повторите поиск."
+  if (type === "missing_value")
+    return "Добавьте конкретное значение характеристики в описание и повторите поиск."
+  if (type === "not_fitting_characteristic" || type === "uncertain_characteristic")
+    return "Проверьте, относится ли эта характеристика к товару. При необходимости исправьте описание."
+  if (type === "missing_required")
+    return "Укажите недостающие обязательные характеристики в описании товара."
+  if (type === "product_not_found")
+    return "Уточните название товара и повторите поиск."
+  if (type === "not_in_ktru" || type === "brand_or_model") return ""
+  return "Проверьте описание товара и повторите поиск после исправления."
+}
+
 function characteristicNotice(name: string, errors: AnalysisResult["errors"]) {
   return errors.find(
     (error) =>
@@ -40,10 +60,37 @@ function characteristicNotice(name: string, errors: AnalysisResult["errors"]) {
 export function CharacteristicsCard({
   result,
   loading,
+  onApply,
 }: {
   result: AnalysisResult | null
   loading: boolean
+  onApply: (item: Characteristic | null, name: string, value: string) => string | null
 }) {
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editValue, setEditValue] = useState("")
+  const [editError, setEditError] = useState("")
+  const openEditor = (key: string, name: string, value = "") => {
+    setEditingKey(key)
+    setEditName(name)
+    setEditValue(value)
+    setEditError("")
+  }
+  const editor = (key: string, item: Characteristic | null) => editingKey === key && (
+    <form className="api-table__editor" onSubmit={(event) => {
+      event.preventDefault()
+      setEditError(onApply(item, editName, editValue) || "")
+    }}>
+      <label>Характеристика<input maxLength={200} onChange={(event) => setEditName(event.target.value)} value={editName} /></label>
+      <label>Значение и единица<input autoFocus maxLength={200} onChange={(event) => setEditValue(event.target.value)} value={editValue} /></label>
+      <p>После сохранения описание обновится, а подбор запустится заново.</p>
+      {editError && <p className="api-table__edit-error" role="alert">{editError}</p>}
+      <div className="api-table__editor-actions">
+        <Button disabled={!editName.trim() || !editValue.trim()} size="sm" type="submit" variant="primary">Сохранить и найти</Button>
+        <Button onClick={() => setEditingKey(null)} size="sm">Отмена</Button>
+      </div>
+    </form>
+  )
   if (loading)
     return (
       <Card className="chars">
@@ -69,6 +116,12 @@ export function CharacteristicsCard({
           )}
         </span>
       </div>
+      {missingRequired.length > 0 && (
+        <section aria-label="Недостающие обязательные характеристики" className="api-required">
+          <strong>Добавьте в описание:</strong>{` ${missingRequired.join(", ")}.`}
+          <span>Выберите характеристику ниже, укажите значение и повторите подбор.</span>
+        </section>
+      )}
       {(result.product_intent || result.category) && (
         <section className="api-section">
           <p>
@@ -108,6 +161,7 @@ export function CharacteristicsCard({
                   {item.suggestion && (
                     <small>Предложение: {item.suggestion}</small>
                   )}
+                  {correctionHint(item.type) && <small className="api-message__hint">Как исправить: {correctionHint(item.type)}</small>}
                 </span>
               </li>
             ))}
@@ -163,10 +217,11 @@ export function CharacteristicsCard({
                     </small>
                   )}
                 </span>
-                <span role="cell">
-                  {correctedText(item.value, result.corrections)}
-                  {item.unit ? ` ${item.unit}` : ""}
+                <span className="api-table__value" role="cell">
+                  <span>{correctedText(item.value, result.corrections)}{item.unit ? ` ${item.unit}` : ""}</span>
+                  <Button onClick={() => openEditor(`found-${index}`, item.name, `${item.value}${item.unit ? ` ${item.unit}` : ""}`)} size="sm" variant="link">Изменить</Button>
                 </span>
+                {editor(`found-${index}`, item)}
               </div>
             )
           })}
@@ -182,7 +237,11 @@ export function CharacteristicsCard({
                   Обязательная по КТРУ
                 </small>
               </span>
-              <span role="cell">Не указано</span>
+              <span className="api-table__value" role="cell">
+                <span>Не указано</span>
+                <Button onClick={() => openEditor(`missing-${name}`, name)} size="sm" variant="link">Добавить</Button>
+              </span>
+              {editor(`missing-${name}`, null)}
             </div>
           ))}
         </div>
