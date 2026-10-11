@@ -47,6 +47,7 @@ export interface NextStep {
 export interface AnalysisResult {
   session_id: string
   product_intent: string | null
+  category?: "одежда" | "мебель" | "инструменты"
   subtype_context: ContextSignal[]
   retrieval_count: number
   compatible_count: number

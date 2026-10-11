@@ -69,22 +69,19 @@ export function CharacteristicsCard({
           )}
         </span>
       </div>
-      {(result.product_intent || result.subtype_context?.length > 0) && (
+      {(result.product_intent || result.category) && (
         <section className="api-section">
-          <h3>Товар и контекст</h3>
+          <h3>Товар</h3>
           <p>
             {result.product_intent && (
               <>
                 Товар: <strong>{result.product_intent}</strong>
               </>
             )}
-            {result.subtype_context?.length > 0 && (
+            {result.category && (
               <>
-                {" "}
-                · Контекст:{" "}
-                {result.subtype_context
-                  .map((signal) => signal.value)
-                  .join(", ")}
+                {result.product_intent && " · "}
+                Категория: <strong>{result.category}</strong>
               </>
             )}
           </p>
