@@ -159,22 +159,50 @@ def test_classifier_judges_what_the_rules_let_through(tmp_path, monkeypatch):
 def test_portal_characteristic_absent_from_the_product_cards_is_warned(monkeypatch):
     class Cards:
         def portal_cards_without(self, category, product, name):
-            return 120 if name in ("Разрешение экрана", "Вид инструмента") else None
+            return 120 if name in ("Разрешение экрана", "Вид инструмента", "Вышивка") else None
 
         def predict(self, items):
-            return [("valid", 0.9) for _ in items]
+            return [("uncertain", 0.4) if it["name"] == "Разрешение экрана" else ("valid", 0.9) for it in items]
 
     monkeypatch.setattr("ml.service.analysis.AnalysisService._new_char_classifier", lambda self: Cards())
     result = result_with("инструменты")
     result["characteristics"] += [
         {"name": "Разрешение экрана", "value": "4K", "unit": None, "origin": "portal", "confidence": 0.8},
         {"name": "Вид инструмента", "value": "Молоток", "unit": None, "origin": "portal", "confidence": 0.8},
-        {"name": "Цвет", "value": "Черный", "unit": None, "origin": "portal", "confidence": 0.8}]
+        {"name": "Цвет", "value": "Черный", "unit": None, "origin": "portal", "confidence": 0.8},
+        # absent from the cards too, but valid by meaning: no warning
+        {"name": "Вышивка", "value": "на рукоятке", "unit": None, "origin": "portal", "confidence": 0.8}]
     with client(result, None, Store()) as c:
         r = c.post("/analyze", json={"raw": "молоток", "answers": []}).json()
     # «Вид инструмента: Молоток» is the product itself, not a characteristic the user wrote
     assert [(e["characteristic"], e["checked_by"]) for e in r["errors"] if e.get("checked_by")] == \
         [("Разрешение экрана", "portal_cards")]
+
+
+def test_rejected_characteristics_leave_the_not_in_ktru_notice(tmp_path, monkeypatch):
+    monkeypatch.setattr("ml.fit.DICT_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr("ml.service.analysis.AnalysisService._new_char_classifier", lambda self: None)
+    names = ["Противоскользящая рукоятка", "Стильный"]
+
+    def notice(*listed):
+        return {"type": "not_in_ktru", "severity": "info", "characteristics": list(listed),
+                "message": f"Для «Молоток» сохранены дополнительные признаки: {', '.join(f'«{n}»' for n in listed)}. "
+                           "Они не исключают коды КТРУ."}
+
+    result = result_with("инструменты", *names)
+    result["errors"] = [notice(*names)]
+    with client(result, None, Store()) as c:
+        r = c.post("/analyze", json={"raw": "молоток", "answers": []}).json()
+    kept = [e for e in r["errors"] if e["type"] == "not_in_ktru"]
+    assert [e["characteristics"] for e in kept] == [["Противоскользящая рукоятка"]]
+    assert kept[0]["message"] == ("Для «Молоток» сохранены дополнительные признаки: «Противоскользящая рукоятка». "
+                                  "Они не исключают коды КТРУ.")
+
+    result = result_with("инструменты", "Стильный")
+    result["errors"] = [notice("Стильный")]
+    with client(result, None, Store()) as c:
+        r = c.post("/analyze", json={"raw": "молоток", "answers": []}).json()
+    assert [e["type"] for e in r["errors"]] == ["not_fitting_characteristic"]  # nothing kept: no notice
 
 
 def test_unreachable_postgres_degrades(caplog):
