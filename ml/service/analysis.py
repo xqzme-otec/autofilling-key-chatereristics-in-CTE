@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Any
 import psycopg
 
 from ml.fit import ProductFit
-from ml.newchar import INVALID, MODEL_PATH, UNCERTAIN, NewCharClassifier
+from ml.newchar import INVALID, MODEL_PATH, UNCERTAIN, VALID, NewCharClassifier
 from ml.service.holder import PipelineHolder
 from ml.service.repository import NewCharacteristicsRepository
 from ml.text import lemmatize_phrase, main_noun
@@ -118,11 +119,20 @@ class AnalysisService:
         errors = result.setdefault("errors", [])
         classifier = self._new_char_classifier()
         shown = result.get("ktru_name") or product
-        for ch in portal if classifier is not None else []:
+        for ch in portal:
             if main_noun(str(ch["value"])) == product:
                 continue  # «куртка» -> «Вид санитарной одежды: Куртка»: the product itself, not a user's characteristic
-            cards = classifier.portal_cards_without(category, product, ch["name"])
-            if cards:
+            # a number in a dimension the product never has: «молоток, объем двигателя 2 л» (portal: chainsaws)
+            reason = fit.reason(category, product, ch["name"], str(ch["value"])) \
+                if any(c.isdigit() for c in str(ch["value"])) else None
+            if reason:
+                errors.append(_not_fitting(ch["name"], f"{reason}.", "rules"))
+                continue
+            cards = classifier.portal_cards_without(category, product, ch["name"]) if classifier is not None else None
+            # absent from the product's cards and not valid by meaning either: «стол, разрешение экрана 4K»;
+            # «халат, вышивка на кармане» is absent too, but the classifier finds it valid
+            if cards and classifier.predict([{"category": category, "product": product, "name": ch["name"],
+                                              "value": str(ch["value"])}])[0][0] != VALID:
                 errors.append(_not_fitting(ch["name"], f"«{ch['name']}» не встречается ни в одной из {cards} карточек "
                                                        f"товаров «{product}» на Портале поставщиков.", "portal_cards"))
         not_saved: dict[str, str] = {}  # name -> zone (checked by)
@@ -155,6 +165,7 @@ class AnalysisService:
         if not_saved:
             logger.warning("new characteristics not remembered: category=%s product=%s %s", category, product,
                            sorted(f"{name}: {zone}" for name, zone in not_saved.items()))
+        _drop_from_not_in_ktru(errors, {e["characteristic"] for e in errors if e["type"] == "not_fitting_characteristic"})
         return set(not_saved)
 
     def _mark_known(self, result: dict, not_fitting: set[str] = frozenset()) -> str:
@@ -187,6 +198,24 @@ class AnalysisService:
         logger.debug("new characteristics: category=%s product=%s seen_before=%s saved=%s not_fitting=%s",
                      category, product, seen, list(accepted), [key for _, key in keyed if key not in accepted])
         return "ok"
+
+
+NOT_IN_KTRU_MESSAGE = re.compile(r"^(Для «.*?» сохранены дополнительные признаки: )(.*)(\. Они не исключают коды КТРУ\.)$")
+
+
+def _drop_from_not_in_ktru(errors: list[dict], rejected: set[str]) -> None:
+    """The not_in_ktru notice says the listed features were kept; the ones that got a not_fitting warning do not
+    belong there. Without any left the notice is removed."""
+    if not rejected:
+        return
+    for error in [e for e in errors if e["type"] == "not_in_ktru"]:
+        error["characteristics"] = [n for n in error.get("characteristics") or [] if n not in rejected]
+        m = NOT_IN_KTRU_MESSAGE.match(error.get("message", ""))
+        listed = [n for n in re.findall(r"«([^»]+)»", m.group(2)) if n not in rejected] if m else None
+        if not error["characteristics"] or listed == []:
+            errors.remove(error)
+        elif m:
+            error["message"] = m.group(1) + ", ".join(f"«{n}»" for n in listed) + m.group(3)
 
 
 def _not_fitting(name: str, reason: str, checked_by: str, confidence: float | None = None) -> dict:

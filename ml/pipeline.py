@@ -44,7 +44,7 @@ from ml.correct import Corrector
 from ml.ktru import DEFAULT_PATH, KtruStore
 from ml.narrow import answer_to_characteristic, missing_required, narrow, rerank_and_question
 from ml.search import EMB_MODEL, Searcher
-from ml.text import main_noun, normalize, pos, to_nominative, tokenize
+from ml.text import is_known, lemma, main_noun, normalize, pos, to_nominative, tokenize
 from ml.portal import PortalMatcher, new_characteristic
 from ml.sizes import SizeMatcher
 from ml.units import DIMENSION_NAMES, NumberMatcher
@@ -67,6 +67,69 @@ ATTRIBUTE_WORDS = {"арт", "артикул", "модель", "производ
                    "габарит"}
 
 
+# names of the maker or the model, not features of the product: their value goes to a brand notice
+BRAND_ATTRIBUTES = {"арт", "артикул", "модель", "производитель", "бренд", "марка", "серия", "код"}
+QUOTED = re.compile(r"[«\"“„]([^«»\"“”„\n]{1,40})[»\"”“]")
+
+
+def _clause_start(text: str, i: int) -> bool:
+    before = text[:i].rstrip()
+    return not before or before[-1] in ",;.:\n("
+
+
+def _brand_word(word: str, text: str, start: int, vocab) -> bool:
+    """A maker or model name, not a feature: «Bosch», «CH-868», «ШХА» in a mixed-case text, «Юнитекс» capitalized
+    in the middle of a clause. A word of the KTRU vocabulary is a value written with a capital letter
+    («Материал Полипропилен», «ОФИСНАЯ ТУМБА»), not a name."""
+    if not any(ch.isalpha() for ch in word):
+        return False
+    if word.isascii():
+        return len(word) >= 2
+    if word.lower() in vocab or lemma(word) in vocab:
+        return False
+    if len(word) >= 2 and word.isupper() and not text.isupper():
+        return True
+    return len(word) >= 3 and word[0].isupper() and word[1:].islower() and not _clause_start(text, start)
+
+
+def _code_part(token: dict, end: int, text: str, vocab) -> bool:
+    """The token continues a model name: glued to it («CH-868», «PH2»), or an article number of 5+ digits; not the
+    first number of a size («DeWalt 22х450мм»)."""
+    word, gap = token["text"], token["span"][0] - end
+    if gap == 0:
+        return word[0].isdigit() or word in "-/." or _brand_word(word, text, token["span"][0], vocab)
+    return gap == 1 and (word.isdigit() and len(word) >= 5 or _brand_word(word, text, token["span"][0], vocab))
+
+
+VOWELS = set("аеёиоуыэюя")
+MIN_KNOWN_TRIGRAMS = 0.6  # «ыврпаоы» 0.0, «ваываыв» 0.29; rare real words: «гварнери» 0.75, «однослойная» 0.91
+
+
+def _trigrams(words) -> set:
+    out = set()
+    for w in words:
+        w = f"^{w}$"
+        out.update(w[i:i + 3] for i in range(len(w) - 2))
+    return out
+
+
+def _gibberish(word: str, trigrams: set, vocab) -> bool:
+    """A lowercase Cyrillic letter string that is no Russian word: no vowels, starts with «ы», a run of five
+    consonants, or letter triples unseen in the KTRU vocabulary. Unknown but plausible words are not gibberish."""
+    if not re.fullmatch(r"[а-яё]+", word) or is_known(word) or word in vocab:
+        return False
+    padded = f"^{word}$"
+    triples = [padded[i:i + 3] for i in range(len(padded) - 2)]
+    known_share = sum(t in trigrams for t in triples) / len(triples)
+    return not VOWELS & set(word) or word[0] in "ыъь" or bool(re.search(r"[^аеёиоуыэюя]{5,}", word)) \
+        or known_share < MIN_KNOWN_TRIGRAMS
+
+
+def _morph_case(word: str) -> str | None:
+    from ml.text import _morph
+    return _morph.parse(word.lower())[0].tag.case
+
+
 def _between_digits(text: str, i: int) -> bool:
     return 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit()
 
@@ -80,6 +143,7 @@ class Pipeline:
         self.numbers = NumberMatcher(self.store)
         self.sizes = SizeMatcher(self.store)
         self.portal = PortalMatcher()
+        self.trigrams = _trigrams(w for w in self.store.vocab if re.fullmatch(r"[а-яё]{3,}", w))
 
     def analyze(self, request: dict | str) -> dict:
         if isinstance(request, str):
@@ -163,6 +227,11 @@ class Pipeline:
             category = self.store.by_code[pool[0]["code"]]["category"]
             # found among search candidates, but none of the remaining positions has it: not KTRU for this product
             pool_chars = {ch["name"] for c in pool for ch in self.store.by_code[c["code"]]["characteristics"]}
+            # «куртка» matched to «Вид санитарной одежды: Куртка» of a dropped candidate: the product itself
+            characteristics = [f for f in characteristics if not (
+                f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars
+                and product_intent and len((f.get("source") or "").split()) == 1
+                and main_noun(f.get("source") or "") == product_intent)]
             for f in characteristics:
                 if f.get("origin") is None and f["method"] != "answer" and f["name"] not in pool_chars \
                         and not f.get("used_for_narrowing"):
@@ -247,6 +316,30 @@ class Pipeline:
         («с противоскользящей рукояткой» → «Противоскользящая рукоятка: Да»). Nothing is dropped."""
         extra, notices, signals, taken = [], [], [], list(taken)
 
+        def overlaps(span, spans):
+            return any(a < span[1] and span[0] < b for a, b in spans)
+
+        upstream = list(taken)  # spans of KTRU characteristics, numbers and errors found before this step
+
+        # maker and model names: «Bosch», «"Олимп"», «Юнитекс», «CH-868» — reported, not turned into features
+        brands: list[list[int]] = []
+        for m in QUOTED.finditer(text):
+            if not overlaps([m.start(), m.end()], taken):
+                brands.append([m.start(1), m.end(1)])
+        tokens = tokenize(text)
+        for i, t in enumerate(tokens):
+            if overlaps(t["span"], taken + brands) or not _brand_word(t["text"], text, t["span"][0], self.store.vocab):
+                continue
+            end = t["span"][1]
+            for nxt in tokens[i + 1:]:  # «CH-868», «ШХА-900(40)»: the code continues the name
+                if overlaps(nxt["span"], taken) or not _code_part(nxt, end, text, self.store.vocab):
+                    break
+                end = nxt["span"][1]
+            while end > t["span"][1] and text[end - 1] in "-/.":
+                end -= 1
+            brands.append([t["span"][0], end])
+        taken += brands
+
         def add(item: dict, source: str, span: list[int]) -> None:
             origin = "portal" if item.pop("portal", False) else "new"
             unknown, known = item.pop("unknown_value", False), item.pop("known_values", [])
@@ -260,6 +353,11 @@ class Pipeline:
 
         # numbers without a place among KTRU characteristics: «стол письменный высотой 75 см»
         for n in unmatched_numbers:
+            if overlaps(n["span"], brands):
+                continue  # a model code: «CH-868»
+            if n["keyword_span"] and re.search(r"(?:^|\s)по\s+$", text[:n["keyword_span"][0]]):
+                # «сверло по металлу 6 мм»: «металлу» is the purpose, not the name of the number
+                n = {**n, "keyword": None, "keyword_span": None}
             phrase = f"{n['keyword']} {n['source']}" if n["keyword"] else n["source"]
             found = self.portal.match(phrase, category, product_intent)
             if found and n.get("synthetic"):
@@ -306,7 +404,8 @@ class Pipeline:
                 continue
             # product-name words are skipped only in the first fragment, where the product itself is named
             in_head = t["span"][0] < head_end
-            if word.isascii() or len(word) < 3 or (in_head and t["lemma"] in product_words) or pos(word) in SKIP_POS:
+            product_word = in_head and (t["lemma"] in product_words or t["lemma"] == product_intent)
+            if word.isascii() or len(word) < 3 or product_word or pos(word) in SKIP_POS:
                 if current and pos(word) not in ("PREP", "CONJ"):  # a preposition may sit inside a phrase
                     groups.append(current)
                     current = []
@@ -319,12 +418,37 @@ class Pipeline:
         for g in groups:
             no_noun = all(pos(t["text"]) != "NOUN" for t in g) and not any(t["text"][0].isdigit() for t in g)
             split += [[t] for t in g] if no_noun and len(g) > 1 else [g]
+        consumed: list[list[int]] = []
+        unreadable: list[list[int]] = []
         for g in split:
-            if len(g) == 1 and g[0]["lemma"] in ATTRIBUTE_WORDS:
-                continue  # an attribute name without a readable value
             span = [g[0]["span"][0], g[-1]["span"][1]]
             phrase = text[span[0]:span[1]]
+            if overlaps(span, consumed):
+                continue  # the value of a characteristic name met earlier
+            if self._unreadable(g):
+                if unreadable and not text[unreadable[-1][1]:span[0]].strip():
+                    unreadable[-1][1] = span[1]  # «ппп ффф ыыы»: one fragment
+                else:
+                    unreadable.append(span)
+                continue
+            if self._part_of_matched_name(g, span, text, upstream):
+                continue
+            purpose = re.search(r"(?:^|\s)(по)\s+$", text[:span[0]])
+            if purpose and pos(g[0]["text"]) == "NOUN" and not any(t["text"][0].isdigit() for t in g):
+                # «сверло по металлу»: the purpose of the product, a yes/no feature on the portal or «Назначение»
+                start = purpose.start(1)
+                found = self.portal.match(text[start:span[1]], category, product_intent)
+                item = {**found, "portal": True} if found else \
+                    {"name": "Назначение", "value": text[start:span[1]].lower(), "unit": None}
+                add(item, text[start:span[1]], [start, span[1]])
+                continue
             found = self.portal.match(phrase, category, product_intent)
+            if g[0]["lemma"] in ATTRIBUTE_WORDS and not found and not any(t["text"][0].isdigit() for t in g):
+                used = self._attribute_without_value(g, text, span, category, product_intent, brands, taken, add,
+                                                     notices)
+                if used:
+                    consumed.append(used)
+                continue
             adjective = len(g) == 1 and pos(g[0]["text"]) in ("ADJF", "PRTF")
             value_attribute = found and found["name"].lower().startswith(("цвет", "материал"))
             subtype = adjective and not value_attribute and self.portal.is_subtype(category, product_intent, g[0]["lemma"])
@@ -341,6 +465,16 @@ class Pipeline:
                 item = {"name": to_nominative([t["text"] for t in g]).capitalize(), "value": "Да", "unit": None}
             add(item, phrase, span)
 
+        for a, b in unreadable:
+            notices.append({"type": "unreadable_fragment", "severity": "warning", "source": text[a:b], "span": [a, b],
+                            "message": f"Не удалось распознать «{text[a:b]}». Поясните, что имелось в виду: "
+                                       "пока этот фрагмент не учтён."})
+        if brands:
+            names = list(dict.fromkeys(text[a:b].strip() for a, b in sorted(brands) if text[a:b].strip()))
+            if names:
+                notices.append({"type": "brand_or_model", "severity": "info", "characteristics": names,
+                                "message": "Бренд, модель или артикул не относятся к характеристикам КТРУ и в подборе "
+                                           f"кода не участвуют: {', '.join(f'«{n}»' for n in names)}."})
         moved = [f for f in characteristics_ref if f.get("origin") in ("portal", "new") and f not in extra]
         if extra or moved:
             product = pool[0]["name"] if len({c["name"] for c in pool}) == 1 else "найденных товаров"
@@ -352,6 +486,65 @@ class Pipeline:
                             "message": f"Для «{product}» сохранены дополнительные признаки: {listed}. "
                                        "Они не исключают коды КТРУ."})
         return extra, notices, signals
+
+    def _unreadable(self, group: list[dict]) -> bool:
+        """Every word is gibberish even after the typo correction: «ыврпаоы», «ппп ффф». Capitalized words are
+        names, compounds («серый-черный») count by their parts."""
+        words = [t["text"] for t in group if t["text"][0].isalpha()]
+        return bool(words) and all(
+            w.islower() and all(_gibberish(part, self.trigrams, self.store.vocab) for part in w.split("-") if part)
+            for w in words)
+
+    def _attribute_without_value(self, group: list[dict], text: str, span: list[int], category: str | None,
+                                 product: str | None, brands: list[list[int]], taken: list[list[int]], add,
+                                 notices: list[dict]) -> list[int] | None:
+        """«материал изготовления HSS», «цвет - синий», «производитель Bosch»: the name of a characteristic, its
+        value is the rest of the clause (without parentheses). A value already used by another characteristic
+        leaves nothing to do; no value at all — the user is asked for it. Returns the span used as the value."""
+        end = next((i for i in range(span[1], len(text)) if text[i] in ",;\n"), len(text))
+        lemmas = [t["lemma"] for t in group]
+        entry = next((name for name_lemmas, name, _ in self.portal.by_category.get(category, [])
+                      if name_lemmas == lemmas), None)
+        name = entry or text[span[0]:span[1]][:1].upper() + text[span[0]:span[1]][1:]
+        if lemmas[0] in BRAND_ATTRIBUTES:
+            if not any(span[1] <= b[0] < end for b in brands):
+                brands.append(span)  # «Производитель» without a name: reported with the brands
+            return None
+        depth, rest = 0, []
+        for t in tokenize(text[span[1]:end]):
+            a, b = t["span"][0] + span[1], t["span"][1] + span[1]
+            depth += t["text"].count("(") - t["text"].count(")")
+            if depth <= 0 and t["text"][0].isalnum():
+                rest.append([a, b])
+        free = [s for s in rest if not any(x < s[1] and s[0] < y for x, y in taken)
+                or any(x <= s[0] and s[1] <= y for x, y in brands)]
+        if rest and not free:
+            return None  # «материал изготовления сталь» with «сталь» taken by «Материал бойка»
+        if not free:
+            notices.append({"type": "missing_value", "severity": "warning", "characteristic": name,
+                            "source": text[span[0]:span[1]], "span": span,
+                            "message": f"Для «{name}» не указано значение — уточните его."})
+            return None
+        value_span = [free[0][0], free[-1][1]]
+        brands[:] = [b for b in brands if not (value_span[0] <= b[0] and b[1] <= value_span[1])]
+        value = text[value_span[0]:value_span[1]]
+        found = self.portal.match(f"{name} {value}", category, product)
+        item = {**found, "portal": True} if found else {"name": name, "value": value, "unit": None,
+                                                        "portal": bool(entry)}
+        add(item, text[span[0]:value_span[1]], [span[0], value_span[1]])
+        return value_span
+
+    @staticmethod
+    def _part_of_matched_name(group: list[dict], span: list[int], text: str, upstream: list[list[int]]) -> bool:
+        """«Угол заточки 135 градус» with «угол … 135 градус» matched: «заточки» is a word of that name, not a
+        feature. A short noun group right before a matched span, or a genitive right after one."""
+        after = len(text[span[1]:]) - len(text[span[1]:].lstrip())
+        if len(group) <= 2 and all(pos(t["text"]) == "NOUN" for t in group) \
+                and any(a == span[1] + after for a, _ in upstream):
+            return True  # «толщина каркаса 20 мм»; an adjective makes it a feature: «противоскользящая рукоятка 30 см»
+        before = text[:span[0]].rstrip()
+        return any(b == len(before) for _, b in upstream) and all(
+            pos(t["text"]) in ("NOUN", "ADJF", "PRTF") and _morph_case(t["text"]) == "gent" for t in group)
 
     @staticmethod
     def _validate(request: dict) -> tuple[str, list[dict], list[dict]]:

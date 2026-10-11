@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 # this many KPGZ categories in total (furniture: 30 for volume, from a few water coolers — not enough)
 MIN_KTRU_POSITIONS = 3
 MIN_PORTAL_USAGE = 60
+# with this many portal cards a product is judged by its own profile, not by its whole category: a hammer has no
+# engine volume although chainsaws in the same «инструменты» do; a dimension is the product's when this share of
+# its cards (and at least MIN_PROFILE_HITS of them) fill in a characteristic of it
+MIN_PROFILE_CARDS = 30
+MIN_PROFILE_SHARE = 0.02
+MIN_PROFILE_HITS = 3
 UNIVERSAL_DIMS = {"length", "mass", "count", "share", "temp", "time", "area", "density"}
 
 # unit as written by users and in the portal exports → dimension: exact abbreviations and word stems
@@ -70,8 +76,26 @@ def _words(text: str) -> list[str]:
     return [t["lemma"] for t in tokenize(text) if t["text"][0].isalpha()]
 
 
+def _profile_dims(profile: dict, chars: dict) -> set:
+    """Dimensions the portal cards of one product fill in: by the unit of the characteristic in the category
+    dictionary, or by its name («Объем двигателя», «Мощность»)."""
+    hits: Counter = Counter()
+    for name, info in profile["chars"].items():
+        unit = (chars.get(name) or {}).get("unit")
+        dim = unit_dimension(unit) if unit else None
+        dim = dim or next((NAME_DIMS[w] for w in _words(name) if w in NAME_DIMS), None)
+        if dim:
+            hits[dim] += info.get("n", 0)
+    need = max(MIN_PROFILE_HITS, MIN_PROFILE_SHARE * profile.get("cards", 0))
+    return {d for d, n in hits.items() if n >= need}
+
+
 def unit_dimension(unit: str) -> str | None:
     unit = unit.strip().lower().replace("ё", "е").rstrip(".")
+    if "куб" in unit or re.search(r"\[3\*?\]|3$", unit) and unit[:1] in "смд":  # «сантиметр кубический», «м[3*]»
+        return "volume"
+    if "квадрат" in unit:
+        return "area"
     return next((dim for dim, rx, stems in UNIT_RES if rx.match(unit) or unit.startswith(stems or ("\0",))), None)
 
 
@@ -87,10 +111,16 @@ class ProductFit:
         self.product_dims = dict(positions)
         self.category_dims = {c: {d for d, n in cnt.items() if n >= MIN_KTRU_POSITIONS} for c, cnt in category_count.items()}
         self.portal_names: dict[str, list[tuple[frozenset, str]]] = defaultdict(list)  # category -> (lemmas, dim)
+        self.profile_dims: dict[tuple[str, str], set] = {}  # (category, product) -> dimensions of its portal cards
         if portal_path.exists():
             for category, chars in json.loads(portal_path.read_text(encoding="utf-8")).items():
+                for product, profile in (chars.get("_profiles") or {}).items():
+                    if profile.get("cards", 0) >= MIN_PROFILE_CARDS:
+                        self.profile_dims[(category, product)] = _profile_dims(profile, chars)
                 usage: Counter = Counter()
                 for name, info in chars.items():
+                    if name.startswith("_"):
+                        continue
                     dim = unit_dimension(info["unit"]) if info.get("unit") else None
                     if dim:
                         usage[dim] += info["usage"]
@@ -108,8 +138,12 @@ class ProductFit:
         if words and all(w in SUBJECTIVE for w in words) and any(w not in SUBJECTIVE_ONLY for w in words):
             return f"«{text}» — субъективная оценка, а не характеристика товара"
         dim = self._dimension(text, words)
-        if dim and dim not in UNIVERSAL_DIMS and dim not in self.category_dims.get(category, set()) \
-                and dim not in self.product_dims.get((category, product), set()) \
+        if not dim or dim in UNIVERSAL_DIMS or dim in self.product_dims.get((category, product), set()):
+            return None
+        profile = self.profile_dims.get((category, product))
+        if profile is not None:  # enough cards of this very product to judge by
+            return None if dim in profile else f"«{text}» — у товаров «{product}» не бывает такой характеристики"
+        if dim not in self.category_dims.get(category, set()) \
                 and not any(d == dim and lemmas <= set(words) for lemmas, d in self.portal_names.get(category, [])):
             return f"«{text}» — у товаров категории «{category}» не бывает такой характеристики"
         return None

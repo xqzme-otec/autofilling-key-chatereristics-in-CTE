@@ -124,6 +124,9 @@ class Corrector:
             # the order of dimensions «ШхГхВ» is not a typo («шагов»)
             if not t["text"][0].isalpha() or len(t["text"]) < 3 or AXES_HEADER_RE.fullmatch(t["text"]):
                 continue
+            if t is not first_word and t["text"][0].isupper() and not self._in_vocab(t["text"]) \
+                    and text[:t["span"][0]].rstrip()[-1:] not in tuple(",;.:\n("):
+                continue  # «стол Модерат», «кресло Юнитекс»: a name inside a clause is not a typo («мохер»)
             context = [o["lemma"] for o in tokens if o is not t and o["text"][0].isalpha() and self._in_vocab(o["text"])]
             fix = self._fix(t["text"], t.get("known", False), context, t is first_word)
             if fix is None:
