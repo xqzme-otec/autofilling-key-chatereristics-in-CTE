@@ -5,9 +5,9 @@ goes into the model and what comes out.
 A characteristic with origin "new" is in neither KTRU nor the portal dictionary. It gets
 `known: true` when another description of the same product (category + product_intent) had it,
 `known: false` otherwise. Seen for the first time, it is saved for the next requests only if it is valid for
-the product: the rules of ml/fit.py, then the e5 + logistic regression classifier of ml/newchar.py. Nothing is
-dropped from the result: an invalid one gets a warning, an uncertain one a request to confirm it, neither is
-saved. Without the classifier file only the rules decide. With Postgres disabled or down the remembering step
+the product: the rules of ml/fit.py, then the e5 + logistic regression classifier of ml/newchar.py. An invalid
+one is not added to the card — only the warning with the reason stays; an uncertain one stays with a request to
+confirm it; neither is saved. Without the classifier file only the rules decide. With Postgres disabled or down the remembering step
 is skipped: no `known` field, the rest of the result is unchanged.
 """
 from __future__ import annotations
@@ -106,8 +106,8 @@ class AnalysisService:
 
     def _check_fit(self, result: dict) -> set[str]:
         """Rules first (ml/fit.py), then the classifier (ml/newchar.py) for origin=new characteristics. Invalid
-        ones get a warning, uncertain ones a request to confirm; all stay in the result. Returns the names of
-        those that must not be remembered. An origin=portal characteristic gets a warning when none of the
+        ones are removed from the card and get a warning, uncertain ones stay with a request to confirm. Returns
+        the names of those that must not be remembered. An origin=portal characteristic gets a warning when none of the
         product's portal cards has it: the portal dictionary is shared by a whole category."""
         category, product = result.get("category"), result.get("product_intent")
         chars = result.get("characteristics") or []
@@ -122,26 +122,45 @@ class AnalysisService:
         for ch in portal:
             if main_noun(str(ch["value"])) == product:
                 continue  # «куртка» -> «Вид санитарной одежды: Куртка»: the product itself, not a user's characteristic
-            # a number in a dimension the product never has: «молоток, объем двигателя 2 л» (portal: chainsaws)
-            reason = fit.reason(category, product, ch["name"], str(ch["value"])) \
-                if any(c.isdigit() for c in str(ch["value"])) else None
+            # a dimension the product never has («молоток, объем двигателя 2 л» — portal: chainsaws) or a word of
+            # another category («витрина, тип изделия Пассатижи»)
+            reason = fit.reason(category, product, ch["name"], str(ch["value"]))
             if reason:
                 errors.append(_not_fitting(ch["name"], f"{reason}.", "rules"))
                 continue
+            doubt = fit.doubt(category, product, ch["name"], str(ch["value"]))
+            if doubt:
+                errors.append(_uncertain(ch["name"], f"{doubt}.", "rules"))
+                continue
             cards = classifier.portal_cards_without(category, product, ch["name"]) if classifier is not None else None
-            # absent from the product's cards and not valid by meaning either: «стол, разрешение экрана 4K»;
-            # «халат, вышивка на кармане» is absent too, but the classifier finds it valid
-            if cards and classifier.predict([{"category": category, "product": product, "name": ch["name"],
-                                              "value": str(ch["value"])}])[0][0] != VALID:
-                errors.append(_not_fitting(ch["name"], f"«{ch['name']}» не встречается ни в одной из {cards} карточек "
-                                                       f"товаров «{product}» на Портале поставщиков.", "portal_cards"))
+            # absent from the product's cards: a measured value is foreign («дрель, разрешение экрана 4K», «жакет,
+            # объем 1 литр»); a word value only when the classifier rejects it too — «платье, с капюшоном» and
+            # «халат, вышивка на кармане» are absent from the cards but fit
+            if not cards:
+                continue
+            numeric = any(c.isdigit() for c in str(ch["value"]))
+            zone, p_valid = classifier.predict([{"category": category, "product": product, "name": ch["name"],
+                                                 "value": str(ch["value"])}])[0]
+            absent = f"«{ch['name']}» не встречается ни в одной из {cards} карточек товаров «{product}» на Портале поставщиков."
+            if zone == INVALID or (numeric and zone == UNCERTAIN):
+                errors.append(_not_fitting(ch["name"], absent, "portal_cards", p_valid))
+            elif numeric:
+                # fits by meaning, but the cards call it otherwise or never fill it in («шуруповерт, частота
+                # вращения» — «число оборотов» in the cards): ask, do not reject
+                errors.append({"type": "uncertain_characteristic", "severity": "info", "characteristic": ch["name"],
+                               "checked_by": "portal_cards", "confidence": p_valid,
+                               "message": f"{absent} Подтвердите, что она относится к товару."})
         not_saved: dict[str, str] = {}  # name -> zone (checked by)
         rest = []
         for ch in new:
             reason = fit.reason(category, product, ch["name"], str(ch["value"]))
+            doubt = None if reason else fit.doubt(category, product, ch["name"], str(ch["value"]))
             if reason:
                 not_saved[ch["name"]] = "invalid (rules)"
                 errors.append(_not_fitting(ch["name"], f"{reason}.", "rules"))
+            elif doubt:
+                not_saved[ch["name"]] = "uncertain (rules)"
+                errors.append(_uncertain(ch["name"], f"{doubt}.", "rules"))
             else:
                 rest.append(ch)
         if classifier is not None and rest:
@@ -165,7 +184,13 @@ class AnalysisService:
         if not_saved:
             logger.warning("new characteristics not remembered: category=%s product=%s %s", category, product,
                            sorted(f"{name}: {zone}" for name, zone in not_saved.items()))
-        _drop_from_not_in_ktru(errors, {e["characteristic"] for e in errors if e["type"] == "not_fitting_characteristic"})
+        # an invalid characteristic is not added to the card: only the warning with the reason stays
+        rejected = {e["characteristic"] for e in errors if e["type"] == "not_fitting_characteristic"}
+        result["characteristics"] = [ch for ch in chars if not (ch.get("origin") in ("portal", "new")
+                                                                and ch["name"] in rejected)]
+        # «сохранены дополнительные признаки» must not list what got a warning or a request to confirm
+        _drop_from_not_in_ktru(errors, rejected | {e["characteristic"] for e in errors
+                                                   if e["type"] == "uncertain_characteristic"})
         return set(not_saved)
 
     def _mark_known(self, result: dict, not_fitting: set[str] = frozenset()) -> str:
@@ -218,10 +243,18 @@ def _drop_from_not_in_ktru(errors: list[dict], rejected: set[str]) -> None:
             error["message"] = m.group(1) + ", ".join(f"«{n}»" for n in listed) + m.group(3)
 
 
+def _uncertain(name: str, reason: str, checked_by: str, confidence: float | None = None) -> dict:
+    error = {"type": "uncertain_characteristic", "severity": "info", "characteristic": name, "checked_by": checked_by,
+             "message": f"{reason} Подтвердите, что признак относится к товару; пока он не запоминается для категории."}
+    if confidence is not None:
+        error["confidence"] = confidence
+    return error
+
+
 def _not_fitting(name: str, reason: str, checked_by: str, confidence: float | None = None) -> dict:
     error = {"type": "not_fitting_characteristic", "severity": "warning", "characteristic": name,
              "checked_by": checked_by,
-             "message": f"{reason} Признак оставлен в карточке, но не запоминается для категории; проверьте описание."}
+             "message": f"{reason} Признак не добавлен в карточку товара; проверьте описание."}
     if confidence is not None:
         error["confidence"] = confidence  # P(valid) from the classifier
     return error

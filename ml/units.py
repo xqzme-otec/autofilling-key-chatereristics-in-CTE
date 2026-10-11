@@ -45,11 +45,18 @@ USER_UNITS = {
     "ач": ("charge", 1), "а*ч": ("charge", 1), "мач": ("charge", 0.001),
     "об/мин": ("rpm", 1), "шт": ("count", 1), "штука": ("count", 1),
     "°c": ("temp", 1), "°с": ("temp", 1), "градус": ("temp", 1), "мм2": ("area", 1),
+    # not in KTRU of these categories, but users write them; without them «футболка 2 литра» lost the number
+    # and turned «литра» into a feature «Литр: Да», and «2 л» vanished
+    "мл": ("volume", 0.001), "миллилитр": ("volume", 0.001), "л": ("volume", 1), "литр": ("volume", 1),
+    "дж": ("energy", 1), "джоуль": ("energy", 1), "ккал": ("energy", 4184),
+    "бар": ("pressure", 1), "атм": ("pressure", 1.01325), "мпа": ("pressure", 10), "кпа": ("pressure", 0.01),
+    "гц": ("frequency", 1), "кгц": ("frequency", 1e3), "мгц": ("frequency", 1e6), "ггц": ("frequency", 1e9),
+    "герц": ("frequency", 1), "км/ч": ("speed", 1),
 }
 # full words come with endings («сантиметров», «килограмма»), abbreviations without
 UNIT_WORDS = ["миллиметр", "сантиметр", "метр", "дюйм", "миллиграмм", "микрограмм", "килограмм", "грамм", "тонн",
               "киловатт", "ватт",
-              "вольт", "штук", "градус"]
+              "вольт", "штук", "градус", "миллилитр", "литр", "джоуль", "герц"]
 USER_UNITS.update({"тонн": ("mass", 1000), "штук": ("count", 1)})
 UNIT_ABBR = sorted((u for u in USER_UNITS if u not in UNIT_WORDS and u not in ("тонна", "штука")), key=len, reverse=True)
 NUM = r"\d+(?:[.,]\d+)?"
@@ -63,9 +70,12 @@ CONTEXT_BEFORE, CONTEXT_AFTER = 3, 2
 # a number with a unit but no keyword is assigned only to a characteristic whose name means that dimension:
 # «стол 1.5 кг» must not land in «Максимальная нагрузка на столешницу»
 DIMENSION_WORDS = {"mass": ("масса", "вес"), "power": ("мощность",), "voltage": ("напряжение",),
-                   "charge": ("емкость",), "rpm": ("частота", "оборот", "скорость")}
+                   "charge": ("емкость",), "rpm": ("частота", "оборот", "скорость"), "volume": ("объем", "литраж"),
+                   "energy": ("энергия",), "pressure": ("давление",)}
 DIMENSION_NAMES = {"mass": "Масса", "power": "Мощность", "voltage": "Напряжение", "charge": "Емкость аккумулятора",
-                   "rpm": "Частота вращения", "length": "Размер", "temp": "Температура", "count": "Количество"}
+                   "rpm": "Частота вращения", "length": "Размер", "temp": "Температура", "count": "Количество",
+                   "volume": "Объем", "energy": "Энергия", "pressure": "Давление", "frequency": "Частота",
+                   "speed": "Скорость"}
 # a value in an open KTRU range («≥ 100 Сантиметр») that is this many times beyond the outermost bound
 # is considered suspicious: «стол высотой 5 метров», «молоток 50 кг»
 SUSPICIOUS_FACTOR = 3
@@ -258,6 +268,20 @@ def find_dimensions(text: str) -> list[dict]:
         if any(u[0] != "length" for u in g["units"]):
             g["units"] = None
     return sorted((g for g in groups if g["units"]), key=lambda g: g["start"])
+
+
+def _foreign_qualifier(keyword_tok: dict, named: list, chars: dict) -> bool:
+    """«длина рукава»: the noun right before the number narrows the name to a part the found positions do not
+    have — no characteristic of theirs mentions «рукав» — so the number is not their «Длина»."""
+    lem = keyword_tok["lemma"]
+    if any(lem in x[2]["keys"] for x in named) or lem in GENERIC or lem in ("изделие", "товар", "предмет"):
+        return False
+    from ml.text import _morph
+    if not any(p.tag.case == "gent" for p in _morph.parse(keyword_tok["text"].lower())[:2]):
+        return False
+    words = {w for info in chars.values() for w in info.get("name_words", ())} | \
+            {k for info in chars.values() for k in info["keys"]}
+    return lem not in words and lem[:5] not in {w[:5] for w in words}
 
 
 class NumberMatcher:
@@ -487,6 +511,9 @@ class NumberMatcher:
                           "keyword_span": keyword_tok["span"] if keyword_tok else None}
             scored = [(self._key_score(context, info["keys"]), name, info) for name, info in chars.items()]
             named = [x for x in scored if x[0] > 0]
+            if named and keyword_tok and _foreign_qualifier(keyword_tok, named, chars):
+                unmatched.append(unassigned)  # «стеллаж, длина рукава 60 см» is not the length of the shelving
+                continue
             if named:
                 best_score = max(x[0] for x in named)
                 options = [x for x in named if x[0] == best_score]

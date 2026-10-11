@@ -16,9 +16,14 @@ TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё]+(?:-[A-Za-zА-Яа-яЁё]+)*|\d+
 _morph = pymorphy3.MorphAnalyzer()
 
 
+# abbreviations of characteristic names, read as the full word: «кол-во полок» is «количество полок», not «колесо»
+ABBREVIATIONS = {"кол-во": "количество", "к-во": "количество", "р-р": "размер"}
+
+
 @lru_cache(maxsize=100_000)
 def lemma(word: str) -> str:
-    return _morph.parse(word.lower())[0].normal_form.replace("ё", "е")
+    w = word.lower()
+    return ABBREVIATIONS.get(w) or _morph.parse(w)[0].normal_form.replace("ё", "е")
 
 
 @lru_cache(maxsize=100_000)
