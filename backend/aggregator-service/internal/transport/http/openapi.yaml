@@ -173,6 +173,7 @@ paths:
                           user_text: слесарный
                           used_for_narrowing: true
                           used_for_reranking: false
+                      category: инструменты
                       candidates:
                         - code: 25.73.30.141-00000012
                           name: Молоток
@@ -425,6 +426,7 @@ components:
                     used_for_narrowing: false
                     used_for_reranking: true
                 product_intent: стул
+                category: мебель
                 subtype_context:
                   - value: Офисный
                     source: user
@@ -489,6 +491,7 @@ components:
                     user_text: противоскользящая рукоятка
                     used_for_narrowing: false
                     used_for_reranking: false
+                category: инструменты
                 candidates:
                   - code: 25.73.30.141-00000012
                     name: Молоток
@@ -631,6 +634,10 @@ components:
         product_intent:
           type: string
           description: Товар, как его поняла модель (лемма). Поля может не быть.
+        category:
+          type: string
+          enum: [одежда, мебель, инструменты]
+          description: Категория найденных товаров. Поля нет, если товар не найден.
         subtype_context:
           type: array
           description: Слова описания, уточняющие вид товара. Влияют на порядок кандидатов, но не исключают коды. Поля может не быть.
