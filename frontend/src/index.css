@@ -63,6 +63,17 @@ fieldset { border: 0; min-width: 0; }
 .api-table__row--missing { background: var(--orange-bg); }
 .api-table__row--missing [role="cell"]:last-child { color: var(--orange-text); font-weight: 600; }
 .api-table__row--missing .api-table__origin { color: var(--orange-text); }
+.api-required { margin-top: 18px; padding: 12px 14px; border: 1px solid #efd9b9; border-radius: var(--radius); background: var(--orange-bg); color: var(--text); font-size: 13px; line-height: 19px; }
+.api-required span { display: block; margin-top: 5px; color: var(--text-2); }
+.api-message__hint { color: var(--blue) !important; }
+.api-table__value { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.api-table__value .btn { padding: 0 3px; }
+.api-table__editor { grid-column: 1 / -1; display: grid; gap: 9px; padding-top: 12px; border-top: 1px solid var(--border); }
+.api-table__editor label { display: grid; gap: 4px; color: var(--text-2); font-size: 12px; }
+.api-table__editor input { min-width: 0; width: 100%; height: 34px; padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: #fff; }
+.api-table__editor p { color: var(--muted); font-size: 11px; line-height: 16px; }
+.api-table__editor .api-table__edit-error { color: var(--red); }
+.api-table__editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .api-table__source { color: var(--text-2); }
 .api-table__origin { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 16px; }
 .api-table__known { display: block; margin-top: 3px; color: var(--blue); font-size: 11px; line-height: 16px; }

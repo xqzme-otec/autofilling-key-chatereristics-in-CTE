@@ -6,6 +6,7 @@ import {
   ApiError,
   type AnalysisResult,
   type BatchResult,
+  type Characteristic,
 } from "./api"
 import { NotificationBar } from "./ui"
 import { Footer, Header, PageHead } from "./layout"
@@ -137,6 +138,25 @@ export default function App() {
     startAnalysis(updated)
     return null
   }
+  const applyCharacteristic = (item: Characteristic | null, name: string, value: string): string | null => {
+    const label = name.trim()
+    const answer = value.trim()
+    if (!label || !answer) return "Укажите название характеристики и её значение."
+    const phrase = `${label}: ${answer}`
+    let updated: string
+    if (item) {
+      const source = (item.user_text || (item.source && !["ktru", "portal", "user"].includes(item.source) ? item.source : "") || "").trim()
+      const index = source ? description.toLocaleLowerCase("ru").indexOf(source.toLocaleLowerCase("ru")) : -1
+      if (index < 0) return "Не удалось найти исходный фрагмент в запросе. Исправьте описание в строке поиска и нажмите «Найти»."
+      updated = description.slice(0, index) + phrase + description.slice(index + source.length)
+    } else {
+      updated = `${description.trim()}${description.trim() ? ", " : ""}${phrase}`
+    }
+    if (updated.length > 2000) return "Описание длиннее 2000 символов. Сократите значение."
+    changeDescription(updated)
+    startAnalysis(updated)
+    return null
+  }
   const submitAnswer = () => {
     if (
       !result?.next_step ||
@@ -236,6 +256,7 @@ export default function App() {
             <aside className="workspace__side">
               <CharacteristicsCard
                 loading={loading && !result}
+                onApply={applyCharacteristic}
                 result={result}
               />
             </aside>
