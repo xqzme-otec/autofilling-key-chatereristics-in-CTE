@@ -103,7 +103,7 @@ def test_without_a_ktru_store_every_characteristic_fits():
     assert len(repository.rows) == 4  # 2 characteristics x 2 descriptions
 
 
-def test_characteristic_that_does_not_fit_is_kept_warned_and_not_saved(tmp_path, monkeypatch):
+def test_characteristic_that_does_not_fit_is_removed_warned_and_not_saved(tmp_path, monkeypatch):
     monkeypatch.setattr("ml.fit.DICT_PATH", tmp_path / "absent.json")
     repository = MemoryRepository()
     result = result_with("инструменты", "Противоскользящая рукоятка", "Стильный")
@@ -111,10 +111,10 @@ def test_characteristic_that_does_not_fit_is_kept_warned_and_not_saved(tmp_path,
         r = c.post("/analyze", json={"raw": "первое описание", "answers": []}).json()
         second = new_characteristics(c, "второе описание")
     assert [ch["name"] for ch in r["characteristics"] if ch["origin"] == "new"] == \
-        ["Противоскользящая рукоятка", "Стильный"]  # nothing dropped
+        ["Противоскользящая рукоятка"]  # the invalid one is not added, only warned about
     warnings = [e for e in r["errors"] if e["type"] == "not_fitting_characteristic"]
     assert [(e["characteristic"], e["severity"]) for e in warnings] == [("Стильный", "warning")]
-    assert [ch["known"] for ch in second] == [True, False]
+    assert [(ch["name"], ch["known"]) for ch in second] == [("Противоскользящая рукоятка", True)]
     assert {key for _, _, key, _ in repository.rows} == {"противоскользящий рукоятка"}
 
 
@@ -152,11 +152,14 @@ def test_classifier_judges_what_the_rules_let_through(tmp_path, monkeypatch):
     assert by_type == {("not_fitting_characteristic", "Стильный", "rules"),
                        ("not_fitting_characteristic", "Размер обуви 42", "model"),
                        ("uncertain_characteristic", "Влагостойкость", "model")}
-    assert len([ch for ch in r["characteristics"] if ch["origin"] == "new"]) == 4  # nothing dropped
+    # invalid ones are not added; the uncertain one stays with a request to confirm
+    assert [ch["name"] for ch in r["characteristics"] if ch["origin"] == "new"] == \
+        ["Противоскользящая рукоятка", "Влагостойкость"]
     assert {key for _, _, key, _ in repository.rows} == {"противоскользящий рукоятка"}  # only the valid one
 
 
-def test_portal_characteristic_absent_from_the_product_cards_is_warned(monkeypatch):
+def test_portal_characteristic_absent_from_the_product_cards_is_warned(tmp_path, monkeypatch):
+    monkeypatch.setattr("ml.fit.DICT_PATH", tmp_path / "absent.json")  # the cards rule alone, no foreign words
     class Cards:
         def portal_cards_without(self, category, product, name):
             return 120 if name in ("Разрешение экрана", "Вид инструмента", "Вышивка") else None

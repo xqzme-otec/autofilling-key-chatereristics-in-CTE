@@ -358,8 +358,20 @@ class Pipeline:
             if n["keyword_span"] and re.search(r"(?:^|\s)по\s+$", text[:n["keyword_span"][0]]):
                 # «сверло по металлу 6 мм»: «металлу» is the purpose, not the name of the number
                 n = {**n, "keyword": None, "keyword_span": None}
+            elif n["keyword"] and _lemmas(n["keyword"])[:1] and \
+                    (_lemmas(n["keyword"])[0] == product_intent or _lemmas(n["keyword"])[0] in product_words):
+                # «футболка мужская 2 л»: the product is not the name of the number («Футболка: 2 л»)
+                n = {**n, "keyword": None, "keyword_span": None}
+            if n["keyword_span"]:
+                # «длина рукава 60 см», «частота вращения 3000 об/мин»: the name is the whole phrase before the
+                # number, not its last word («Рукава: 60 см» + «Длина: Да»)
+                start = self._name_start(text, n["keyword_span"][0], taken + brands, product_words, product_intent)
+                if start < n["keyword_span"][0]:
+                    n = {**n, "keyword": text[start:n["keyword_span"][1]], "keyword_span": [start, n["keyword_span"][1]]}
             phrase = f"{n['keyword']} {n['source']}" if n["keyword"] else n["source"]
             found = self.portal.match(phrase, category, product_intent)
+            if found and n["keyword"] and len(_lemmas(found["name"])) < len(_lemmas(n["keyword"])):
+                found = None  # «Длина: рукава 60 см»: the portal knows only a shorter name, keep the user's one
             if found and n.get("synthetic"):
                 # a size or a dimension named by us: its format («120x60x75 см», «XL») is not compared
                 # with the portal's free-text examples
@@ -368,7 +380,8 @@ class Pipeline:
             if found:
                 item = {**found, "portal": True}
             else:
-                name = to_nominative([n["keyword"]]).capitalize() if n["keyword"] else \
+                head, *rest = (n["keyword"] or "").split()  or [""]
+                name = " ".join([to_nominative([head]).capitalize(), *rest]) if n["keyword"] else \
                     DIMENSION_NAMES.get(n["dimension"], "Числовая характеристика")
                 item = {"name": name, "value": n["value_text"], "unit": None}
             start = n["keyword_span"][0] if n["keyword_span"] else n["span"][0]
@@ -462,7 +475,10 @@ class Pipeline:
             elif any(t["text"][0].isdigit() for t in g):  # «гарантия 3 года» → name + value
                 item = new_characteristic(phrase)
             else:
-                item = {"name": to_nominative([t["text"] for t in g]).capitalize(), "value": "Да", "unit": None}
+                # «в собранном виде Нет»: the answer after the phrase is its value, not a lost word
+                answer = re.match(r"[\s:—-]*(да|нет)\b", text[span[1]:], re.IGNORECASE)
+                item = {"name": to_nominative([t["text"] for t in g]).capitalize(),
+                        "value": answer.group(1).capitalize() if answer else "Да", "unit": None}
             add(item, phrase, span)
 
         for a, b in unreadable:
@@ -533,6 +549,26 @@ class Pipeline:
                                                         "portal": bool(entry)}
         add(item, text[span[0]:value_span[1]], [span[0], value_span[1]])
         return value_span
+
+    @staticmethod
+    def _name_start(text: str, keyword_start: int, taken: list[list[int]], product_words: set,
+                    product: str | None) -> int:
+        """Where the name of a number starts: up to three words before its keyword in the same clause — nouns,
+        adjectives and a preposition inside («нагрузка на полку»); not the product, not a taken word."""
+        words = [t for t in tokenize(text[:keyword_start]) if t["span"][1] <= keyword_start]
+        start, count = keyword_start, 0
+        for t in reversed(words):
+            word = t["text"]
+            if not word[0].isalpha() or any(a < t["span"][1] and t["span"][0] < b for a, b in taken) \
+                    or t["lemma"] in product_words or t["lemma"] == product or count >= 3:
+                break
+            kind = pos(word)
+            if kind == "PREP" and word.lower() in ("на", "для", "по", "до", "от"):
+                continue  # kept only if a word before it joins the name
+            if kind not in ("NOUN", "ADJF", "PRTF"):
+                break
+            start, count = t["span"][0], count + 1
+        return start
 
     @staticmethod
     def _part_of_matched_name(group: list[dict], span: list[int], text: str, upstream: list[list[int]]) -> bool:

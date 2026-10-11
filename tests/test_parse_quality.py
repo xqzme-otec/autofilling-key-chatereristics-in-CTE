@@ -111,3 +111,47 @@ def test_dimensions_are_judged_by_the_product():
     assert fit.reason("инструменты", "молоток", "Объем двигателя", "2 л")  # chainsaws have it, hammers do not
     assert fit.reason("инструменты", "дрель", "Мощность", "750 Вт") is None
     assert fit.reason("инструменты", "шуруповерт", "Напряжение", "18 В") is None
+
+
+@needs_data
+@pytest.mark.parametrize("text, name, value", [
+    ("футболка мужская 2 литра", "Объем", "2 литра"),          # volume is a unit: the number is not lost
+    ("стол письменный, длина рукава 60 см", "Длина рукава", "60 см"),  # the whole name, not «Рукава» + «Длина: Да»
+    ("молоток слесарный, частота вращения 3000 об/мин", "Частота вращения", "3000 об/мин"),
+    ("шкаф, в собранном виде Нет", "Собранный вид", "Нет"),     # the answer after the phrase is its value
+])
+def test_names_and_values_are_kept_whole(pipeline, text, name, value):
+    assert (name, value) in extra(pipeline.analyze(text))
+
+
+@needs_data
+def test_a_part_the_product_does_not_have_is_not_its_dimension(pipeline):
+    r = pipeline.analyze("стеллаж металлический, длина рукава 60 см")
+    assert ("Длина рукава", "60 см") in extra(r)
+    assert not any(c["origin"] == "ktru" and "60" in c.get("source", "") for c in r["characteristics"])
+
+
+@needs_data
+def test_words_of_another_category():
+    from ml.fit import ProductFit
+    from ml.ktru import KtruStore
+    fit = ProductFit(KtruStore())
+    assert fit.reason("мебель", "витрина", "Тип изделия", "пассатижи")       # a tool named as a furniture type
+    assert fit.reason("одежда", "брюки", "Цвет", "лдсп серый")
+    assert fit.reason("одежда", "куртка", "Подогрев", "Да") is None          # rare for clothing: ask, not reject
+    assert fit.doubt("одежда", "куртка", "Подогрев", "Да")
+    for category, product, name in (("одежда", "куртка", "Светоотражающие полосы"),
+                                    ("инструменты", "молоток", "Обрезиненная рукоятка"),
+                                    ("мебель", "кресло", "Механизм качания"), ("мебель", "кресло", "Функция массажа")):
+        assert fit.reason(category, product, name, "Да") is None and fit.doubt(category, product, name, "Да") is None
+
+
+@needs_data
+def test_invalid_characteristics_are_not_added():
+    from fastapi.testclient import TestClient
+    from ml.service.app import create_app
+    from ml.service.config import Settings
+    with TestClient(create_app(Settings(), load_in_background=False)) as c:
+        r = c.post("/analyze", json={"raw": "футболка мужская 2 литра", "answers": []}).json()
+    assert not any("объем" in ch["name"].lower() or "литр" in ch["name"].lower() for ch in r["characteristics"])
+    assert any(e["type"] == "not_fitting_characteristic" for e in r["errors"])
