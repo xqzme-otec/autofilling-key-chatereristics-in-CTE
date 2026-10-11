@@ -71,6 +71,7 @@ def create_app(settings: Settings | None = None, pipeline_factory: Callable[[], 
                              daemon=True).start()
         else:
             holder.load()
+            service.warm_up()
         yield
         if repository is not None:
             repository.close()
@@ -109,13 +110,14 @@ def create_app(settings: Settings | None = None, pipeline_factory: Callable[[], 
         if repository is not None:
             postgres = "ok" if await run_in_threadpool(repository.ping) else "unavailable"
         return {"status": "degraded" if postgres == "unavailable" else "ok", "pipeline": holder.status,
-                "postgres": postgres}
+                "postgres": postgres, "newchar_classifier": service.classifier_status()}
 
     @app.get("/ready")
     async def ready():
         body: dict[str, Any] = {"status": holder.status}
         if holder.status == READY:
             body["load_seconds"] = holder.load_seconds
+            body["newchar_classifier"] = service.classifier_status()
             return body
         if holder.status == FAILED:
             body["error"] = holder.error
