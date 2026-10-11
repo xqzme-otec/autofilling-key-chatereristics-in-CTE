@@ -70,11 +70,18 @@ fieldset { border: 0; min-width: 0; }
 .api-table__value .btn { padding: 0 3px; }
 .api-table__editor { grid-column: 1 / -1; display: grid; gap: 9px; padding-top: 12px; border-top: 1px solid var(--border); }
 .api-table__editor label { display: grid; gap: 4px; color: var(--text-2); font-size: 12px; }
-.api-table__editor input { min-width: 0; width: 100%; height: 34px; padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: #fff; }
+.api-table__editor input, .api-table__editor textarea, .api-message__editor textarea { min-width: 0; width: 100%; padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: #fff; font: inherit; }
+.api-table__editor input { height: 34px; }
+.api-table__editor textarea, .api-message__editor textarea { resize: vertical; line-height: 1.5; }
 .api-table__editor p { color: var(--muted); font-size: 11px; line-height: 16px; }
 .api-table__editor .api-table__edit-error { color: var(--red); }
 .api-table__editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.api-table__source { color: var(--text-2); }
+.api-table__source { display: block; flex-basis: 100%; order: 2; color: var(--text-2); font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
+.api-message__content { min-width: 0; flex: 1; }
+.api-message__editor { display: grid; gap: 8px; margin-top: 10px; }
+.api-message__editor label { display: grid; gap: 5px; color: var(--text-2); font-size: 12px; }
+.api-message__editor p { color: var(--red); font-size: 12px; }
+.api-message__editor .btn { justify-self: start; }
 .api-table__origin { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 16px; }
 .api-table__known { display: block; margin-top: 3px; color: var(--blue); font-size: 11px; line-height: 16px; }
 .api-table__notice { display: block; margin-top: 4px; font-size: 11px; line-height: 16px; font-weight: 600; }

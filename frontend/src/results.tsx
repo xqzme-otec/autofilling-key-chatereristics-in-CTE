@@ -57,36 +57,73 @@ function characteristicNotice(name: string, errors: AnalysisResult["errors"]) {
   )
 }
 
+function sourceFragment(item: Characteristic): string {
+  return (item.user_text || (item.source && !["ktru", "portal", "user", "new", "answer"].includes(item.source) ? item.source : "") || "").trim()
+}
+
+function sourceLabel(item: Characteristic, description: string): string {
+  if (item.origin === "answer") return "Из ответа"
+  if (description.toLocaleLowerCase("ru").includes(sourceFragment(item).toLocaleLowerCase("ru")))
+    return "В описании"
+  return "Исходный фрагмент"
+}
+
 export function CharacteristicsCard({
   result,
   loading,
   onApply,
+  description,
+  onAnalyzeDescription,
 }: {
   result: AnalysisResult | null
   loading: boolean
   onApply: (item: Characteristic | null, name: string, value: string) => string | null
+  description: string
+  onAnalyzeDescription: (text: string) => string | null
 }) {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editName, setEditName] = useState("")
   const [editValue, setEditValue] = useState("")
   const [editError, setEditError] = useState("")
-  const openEditor = (key: string, name: string, value = "") => {
+  const [showFullEditor, setShowFullEditor] = useState(false)
+  const [fullDescription, setFullDescription] = useState("")
+  const [unreadableKey, setUnreadableKey] = useState<string | null>(null)
+  const [unreadableDescription, setUnreadableDescription] = useState("")
+  const [unreadableError, setUnreadableError] = useState("")
+  const openEditor = (key: string, name: string, value = "", item: Characteristic | null = null) => {
     setEditingKey(key)
     setEditName(name)
     setEditValue(value)
     setEditError("")
+    setFullDescription(description)
+    const fragment = item ? sourceFragment(item) : ""
+    setShowFullEditor(Boolean(item && (!fragment || !description.toLocaleLowerCase("ru").includes(fragment.toLocaleLowerCase("ru")))))
   }
   const editor = (key: string, item: Characteristic | null) => editingKey === key && (
     <form className="api-table__editor" onSubmit={(event) => {
       event.preventDefault()
-      setEditError(onApply(item, editName, editValue) || "")
+      const error = showFullEditor
+        ? onAnalyzeDescription(fullDescription)
+        : onApply(item, editName, editValue)
+      setEditError(error || "")
+      if (error?.startsWith("Не удалось найти исходный фрагмент") && !showFullEditor)
+        setShowFullEditor(true)
     }}>
-      <label>Характеристика<input maxLength={200} onChange={(event) => setEditName(event.target.value)} value={editName} /></label>
-      <label>Значение и единица<input autoFocus maxLength={200} onChange={(event) => setEditValue(event.target.value)} value={editValue} /></label>
+      {showFullEditor ? (
+        <>
+          <p>Исходный фрагмент не найден в запросе. Исправьте описание целиком и повторите поиск.</p>
+          <label>Описание товара<textarea autoFocus maxLength={2000} onChange={(event) => setFullDescription(event.target.value)} rows={4} value={fullDescription} /></label>
+        </>
+      ) : (
+        <>
+          <label>Характеристика<input maxLength={200} onChange={(event) => setEditName(event.target.value)} value={editName} /></label>
+          <label>Значение и единица<input autoFocus maxLength={200} onChange={(event) => setEditValue(event.target.value)} value={editValue} /></label>
+        </>
+      )}
       <p>После сохранения описание обновится, а подбор запустится заново.</p>
       {editError && <p className="api-table__edit-error" role="alert">{editError}</p>}
       <div className="api-table__editor-actions">
-        <Button disabled={!editName.trim() || !editValue.trim()} size="sm" type="submit" variant="primary">Сохранить и найти</Button>
+        <Button disabled={showFullEditor ? !fullDescription.trim() || fullDescription === description : !editName.trim() || !editValue.trim()} size="sm" type="submit" variant="primary">Сохранить и найти</Button>
         <Button onClick={() => setEditingKey(null)} size="sm">Отмена</Button>
       </div>
     </form>
@@ -127,7 +164,7 @@ export function CharacteristicsCard({
           <p>
             {result.product_intent && (
               <>
-                Группа товаров: <strong>{result.product_intent}</strong>
+                Товар: <strong>{result.product_intent}</strong>
               </>
             )}
             {result.category && (
@@ -152,7 +189,7 @@ export function CharacteristicsCard({
                   name={item.severity === "info" ? "info" : "alert"}
                   size={16}
                 />
-                <span>
+                <div className="api-message__content">
                   <b className="api-message__label">
                     {errorLabel(item.severity)}
                   </b>
@@ -162,7 +199,27 @@ export function CharacteristicsCard({
                     <small>Предложение: {item.suggestion}</small>
                   )}
                   {correctionHint(item.type) && <small className="api-message__hint">Как исправить: {correctionHint(item.type)}</small>}
-                </span>
+                  {item.type === "unreadable_fragment" && (
+                    <>
+                      <Button onClick={() => {
+                        const key = `${item.type}-${index}`
+                        setUnreadableKey(unreadableKey === key ? null : key)
+                        setUnreadableDescription(description)
+                        setUnreadableError("")
+                      }} size="sm" variant="link">Пояснить фрагмент</Button>
+                      {unreadableKey === `${item.type}-${index}` && (
+                        <form className="api-message__editor" onSubmit={(event) => {
+                          event.preventDefault()
+                          setUnreadableError(onAnalyzeDescription(unreadableDescription) || "")
+                        }}>
+                          <label>Перепишите непонятный фрагмент в описании<textarea autoFocus maxLength={2000} onChange={(event) => setUnreadableDescription(event.target.value)} rows={4} value={unreadableDescription} /></label>
+                          {unreadableError && <p role="alert">{unreadableError}</p>}
+                          <Button disabled={!unreadableDescription.trim() || unreadableDescription === description} size="sm" type="submit" variant="primary">Повторить поиск</Button>
+                        </form>
+                      )}
+                    </>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
@@ -219,7 +276,8 @@ export function CharacteristicsCard({
                 </span>
                 <span className="api-table__value" role="cell">
                   <span>{correctedText(item.value, result.corrections)}{item.unit ? ` ${item.unit}` : ""}</span>
-                  <Button onClick={() => openEditor(`found-${index}`, item.name, `${item.value}${item.unit ? ` ${item.unit}` : ""}`)} size="sm" variant="link">Изменить</Button>
+                  {sourceFragment(item) && <small className="api-table__source">{sourceLabel(item, description)}: «{sourceFragment(item)}»</small>}
+                  <Button onClick={() => openEditor(`found-${index}`, item.name, `${item.value}${item.unit ? ` ${item.unit}` : ""}`, item)} size="sm" variant="link">Изменить</Button>
                 </span>
                 {editor(`found-${index}`, item)}
               </div>

@@ -158,8 +158,6 @@ export function Footer() {
           </nav>
           <p>
             © 2026 Портал поставщиков
-            <br />
-            Характеристики и подбор КТРУ
           </p>
         </div>
         <div className="footer__side">

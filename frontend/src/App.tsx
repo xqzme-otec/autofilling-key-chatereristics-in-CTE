@@ -128,6 +128,14 @@ export default function App() {
     setSelectedAnswer("")
     void perform((signal) => analyze(text, signal))
   }
+  const analyzeEditedDescription = (text: string): string | null => {
+    if (!text.trim()) return "Введите описание товара."
+    if (text.length > 2000) return "Описание длиннее 2000 символов. Сократите его."
+    if (text === description) return "Измените описание перед повторным поиском."
+    changeDescription(text)
+    startAnalysis(text)
+    return null
+  }
   const applyCorrection = (correction: { from: string }, replacement: string): string | null => {
     const original = correction.from.trim()
     const index = description.toLocaleLowerCase("ru").indexOf(original.toLocaleLowerCase("ru"))
@@ -255,7 +263,9 @@ export default function App() {
             </div>
             <aside className="workspace__side">
               <CharacteristicsCard
+                description={description}
                 loading={loading && !result}
+                onAnalyzeDescription={analyzeEditedDescription}
                 onApply={applyCharacteristic}
                 result={result}
               />
