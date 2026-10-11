@@ -71,11 +71,10 @@ export function CharacteristicsCard({
       </div>
       {(result.product_intent || result.category) && (
         <section className="api-section">
-          <h3>Товар</h3>
           <p>
             {result.product_intent && (
               <>
-                Товар: <strong>{result.product_intent}</strong>
+                Группа товаров: <strong>{result.product_intent}</strong>
               </>
             )}
             {result.category && (
