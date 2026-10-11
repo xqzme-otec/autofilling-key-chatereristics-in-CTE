@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Токены и леммы.
+"""Tokens and lemmas.
 
-В продакшене токены с леммами присылает бэкенд (поле `tokens` во входном JSON).
-Здесь — временная замена на pymorphy3, чтобы ML-часть работала и тестировалась
-без бэкенда. Формат токена такой же, как в контракте с бэкендом.
+In production the backend sends tokens with lemmas (the `tokens` field of the input JSON).
+This is a temporary pymorphy3 replacement so that the ML part runs and is tested
+without the backend. The token format is the same as in the backend contract.
 """
 import re
 from functools import lru_cache
@@ -31,7 +31,7 @@ _NORMALIZE = str.maketrans({"ё": "е", "Ё": "Е", "«": '"', "»": '"', "„":
 
 
 def normalize(text: str) -> str:
-    """Посимвольная нормализация: длина текста не меняется, спаны остаются верными."""
+    """Character-by-character normalization: the text length does not change, spans stay valid."""
     text = text.translate(_NORMALIZE)
     return re.sub(r"(?i)\bх/б\b", lambda m: m.group()[0] + "б ", text)  # «х/б» → «хб »
 
@@ -55,14 +55,14 @@ def lemmatize_phrase(text: str) -> str:
 
 
 def word_forms(word: str) -> set[str]:
-    """Все словоформы слова: «тумба» → {тумба, тумбы, тумбой, ...}. Для незнакомых слов — пусто."""
+    """All forms of a word: «тумба» → {тумба, тумбы, тумбой, ...}. Empty for unknown words."""
     if not is_known(word):
         return set()
     return {f.word.replace("ё", "е") for f in _morph.parse(word.lower())[0].lexeme}
 
 
 def main_noun(text: str) -> str | None:
-    """Лемма первого существительного — обычно это сам товар («офисный стул» → «стул»)."""
+    """Lemma of the first noun — usually the product itself («офисный стул» → «стул»)."""
     for t in tokenize(text):
         if t["text"][0].isalpha() and len(t["text"]) > 2:
             p = _morph.parse(t["text"].lower())[0]
@@ -72,7 +72,7 @@ def main_noun(text: str) -> str | None:
 
 
 def pos(word: str) -> str | None:
-    """Часть речи (NOUN, ADJF, VERB, …) самого вероятного разбора."""
+    """Part of speech (NOUN, ADJF, VERB, …) of the most probable parse."""
     return _morph.parse(word.lower())[0].tag.POS
 
 

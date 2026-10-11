@@ -4,23 +4,29 @@ goes into the model and what comes out.
 
 A characteristic with origin "new" is in neither KTRU nor the portal dictionary. It gets
 `known: true` when another description of the same product (category + product_intent) had it,
-`known: false` otherwise. Seen for the first time, it is saved for the next requests only if it fits
-the product (fits_product). With Postgres disabled or down the step is skipped: no `known` field, the
-rest of the result is unchanged.
+`known: false` otherwise. Seen for the first time, it is saved for the next requests only if it is valid for
+the product: the rules of ml/fit.py, then the e5 + logistic regression classifier of ml/newchar.py. Nothing is
+dropped from the result: an invalid one gets a warning, an uncertain one a request to confirm it, neither is
+saved. Without the classifier file only the rules decide. With Postgres disabled or down the remembering step
+is skipped: no `known` field, the rest of the result is unchanged.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
+import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import psycopg
 
+from ml.fit import ProductFit
+from ml.newchar import INVALID, MODEL_PATH, UNCERTAIN, NewCharClassifier
 from ml.service.holder import PipelineHolder
 from ml.service.repository import NewCharacteristicsRepository
-from ml.text import lemmatize_phrase
+from ml.text import lemmatize_phrase, main_noun
 
 logger = logging.getLogger(__name__)
 
@@ -36,22 +42,17 @@ def characteristic_key(name: str) -> str:
     return " ".join(sorted(lemmatize_phrase(name).split()))
 
 
-def fits_product(category: str, product: str, name: str, value: str) -> bool:
-    """Is a characteristic seen for the first time meaningful for this product? Only one that fits is
-    saved and becomes known later; one that does not fit stays in the result (nothing is dropped,
-    docs/DOC.md, invariant 2) but is not saved."""
-    # TODO: decide with a model instead of accepting everything: e.g. e5 similarity (already loaded in
-    #  the pipeline) of «name: value» to the KTRU descriptions of the product and to the portal
-    #  characteristics of the category, threshold chosen on a benchmark (portal characteristics of the
-    #  category vs ones from other categories). When it can say "no", also warn the user in `errors`.
-    return True
-
-
 class AnalysisService:
-    def __init__(self, holder: PipelineHolder, repository: NewCharacteristicsRepository | None = None):
+    def __init__(self, holder: PipelineHolder, repository: NewCharacteristicsRepository | None = None,
+                 classifier_path: Path = MODEL_PATH):
         self.holder = holder
         self.repository = repository
+        self.classifier_path = classifier_path
         self._skip_until = 0.0
+        self._fit: ProductFit | None = None
+        self._classifier: NewCharClassifier | None = None
+        self._classifier_tried = False
+        self._fit_lock = threading.Lock()
 
     def analyze(self, request: dict[str, Any]) -> dict:
         _log_input(request)
@@ -59,12 +60,104 @@ class AnalysisService:
         result, queued_ms = self.holder.analyze(request)
         pipeline_ms = (time.perf_counter() - start) * 1000 - queued_ms
         start = time.perf_counter()
-        postgres = self._mark_known(result)
+        not_fitting = self._check_fit(result)
+        postgres = self._mark_known(result, not_fitting)
         postgres_ms = (time.perf_counter() - start) * 1000
         _log_output(request, result, postgres, queued_ms, pipeline_ms, postgres_ms)
         return result
 
-    def _mark_known(self, result: dict) -> str:
+    def warm_up(self) -> None:
+        """Loads the rules and the classifier ahead of the first request (they need the loaded pipeline)."""
+        if self._product_fit() is not None:
+            self._new_char_classifier()
+
+    def _product_fit(self) -> ProductFit | None:
+        """Built once from the loaded pipeline's KTRU store; None for a pipeline without one (tests)."""
+        if self._fit is None:
+            store = getattr(self.holder.pipeline, "store", None)
+            if store is None:
+                return None
+            with self._fit_lock:
+                if self._fit is None:
+                    self._fit = ProductFit(store)
+        return self._fit
+
+    def _new_char_classifier(self) -> NewCharClassifier | None:
+        """Loaded once with the pipeline's e5 model; None without the model file (only the rules decide)."""
+        if not self._classifier_tried:
+            with self._fit_lock:
+                if not self._classifier_tried:
+                    pipeline = self.holder.pipeline
+                    encoder = getattr(getattr(pipeline, "searcher", None), "model", None)
+                    store = getattr(pipeline, "store", None)
+                    if encoder is not None and store is not None:
+                        if not self.classifier_path.exists():
+                            logger.warning("no newchar classifier at %s (python -m ml.newchar build): "
+                                           "new characteristics are judged by the rules only", self.classifier_path)
+                        else:
+                            try:
+                                self._classifier = NewCharClassifier(encoder, store, self.classifier_path,
+                                                                     fit=self._fit)
+                            except Exception:
+                                logger.exception("newchar classifier failed to load: rules only")
+                    self._classifier_tried = True
+        return self._classifier
+
+    def _check_fit(self, result: dict) -> set[str]:
+        """Rules first (ml/fit.py), then the classifier (ml/newchar.py) for origin=new characteristics. Invalid
+        ones get a warning, uncertain ones a request to confirm; all stay in the result. Returns the names of
+        those that must not be remembered. An origin=portal characteristic gets a warning when none of the
+        product's portal cards has it: the portal dictionary is shared by a whole category."""
+        category, product = result.get("category"), result.get("product_intent")
+        chars = result.get("characteristics") or []
+        new = [ch for ch in chars if ch.get("origin") == "new"]
+        portal = [ch for ch in chars if ch.get("origin") == "portal"]
+        fit = self._product_fit() if (new or portal) and category and product else None
+        if fit is None:
+            return set()
+        errors = result.setdefault("errors", [])
+        classifier = self._new_char_classifier()
+        shown = result.get("ktru_name") or product
+        for ch in portal if classifier is not None else []:
+            if main_noun(str(ch["value"])) == product:
+                continue  # «куртка» -> «Вид санитарной одежды: Куртка»: the product itself, not a user's characteristic
+            cards = classifier.portal_cards_without(category, product, ch["name"])
+            if cards:
+                errors.append(_not_fitting(ch["name"], f"«{ch['name']}» не встречается ни в одной из {cards} карточек "
+                                                       f"товаров «{product}» на Портале поставщиков.", "portal_cards"))
+        not_saved: dict[str, str] = {}  # name -> zone (checked by)
+        rest = []
+        for ch in new:
+            reason = fit.reason(category, product, ch["name"], str(ch["value"]))
+            if reason:
+                not_saved[ch["name"]] = "invalid (rules)"
+                errors.append(_not_fitting(ch["name"], f"{reason}.", "rules"))
+            else:
+                rest.append(ch)
+        if classifier is not None and rest:
+            zones = classifier.predict([{"category": category, "product": product, "name": ch["name"],
+                                         "value": str(ch["value"])} for ch in rest])
+            for ch, (zone, p_valid) in zip(rest, zones):
+                if zone == INVALID:
+                    not_saved[ch["name"]] = f"invalid ({p_valid})"
+                    errors.append(_not_fitting(ch["name"], f"«{ch['name']}» не похоже на характеристику товара "
+                                                           f"«{shown}».", "model", p_valid))
+                elif zone == UNCERTAIN:
+                    not_saved[ch["name"]] = f"uncertain ({p_valid})"
+                    errors.append({"type": "uncertain_characteristic", "severity": "info", "characteristic": ch["name"],
+                                   "checked_by": "model", "confidence": p_valid,
+                                   "message": f"Не уверены, что «{ch['name']}» относится к товару «{shown}». "
+                                              "Подтвердите или исправьте; пока признак не запоминается для категории."})
+        flagged = [e["characteristic"] for e in errors if e.get("checked_by") == "portal_cards"]
+        if flagged:
+            logger.warning("portal characteristics absent from the product's portal cards: category=%s product=%s %s",
+                           category, product, flagged)
+        if not_saved:
+            logger.warning("new characteristics not remembered: category=%s product=%s %s", category, product,
+                           sorted(f"{name}: {zone}" for name, zone in not_saved.items()))
+        return set(not_saved)
+
+    def _mark_known(self, result: dict, not_fitting: set[str] = frozenset()) -> str:
         """Sets `known` on origin=new characteristics and saves the ones that fit the product; returns the
         step status for the log."""
         if self.repository is None:
@@ -82,7 +175,7 @@ class AnalysisService:
             seen = self.repository.seen_before(category, product, [key for _, key in keyed], text_hash)
             # seen before = it fitted then; seen for the first time = it has to fit the product now
             accepted = {key: (key, ch["name"], ch["value"], ch.get("unit")) for ch, key in keyed
-                        if key in seen or fits_product(category, product, ch["name"], ch["value"])}
+                        if key in seen or ch["name"] not in not_fitting}
             self.repository.save(category, product, text_hash, list(accepted.values()))
         except psycopg.Error as e:
             self._skip_until = time.monotonic() + RETRY_AFTER_S
@@ -94,6 +187,15 @@ class AnalysisService:
         logger.debug("new characteristics: category=%s product=%s seen_before=%s saved=%s not_fitting=%s",
                      category, product, seen, list(accepted), [key for _, key in keyed if key not in accepted])
         return "ok"
+
+
+def _not_fitting(name: str, reason: str, checked_by: str, confidence: float | None = None) -> dict:
+    error = {"type": "not_fitting_characteristic", "severity": "warning", "characteristic": name,
+             "checked_by": checked_by,
+             "message": f"{reason} Признак оставлен в карточке, но не запоминается для категории; проверьте описание."}
+    if confidence is not None:
+        error["confidence"] = confidence  # P(valid) from the classifier
+    return error
 
 
 def _short(text: str, limit: int = LOG_VALUE_CHARS) -> str:

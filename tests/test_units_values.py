@@ -50,6 +50,6 @@ def test_nonexistent_value_named_characteristic(store):
 
 
 def test_other_attribute_is_not_an_error(store):
-    # «цвет обивки» — другая характеристика, а не значение «Материал обивки»
+    # «цвет обивки» is another characteristic, not a value of «Материал обивки»
     _, errors, _ = ValueMatcher(store).match("стул офисный, цвет обивки синий", ["31.01.11.150-MOCK0001"])
     assert errors == []

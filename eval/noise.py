@@ -1,4 +1,4 @@
-"""Порча текста для проверки устойчивости: опечатки, перестановки, пропуски букв, раскладка."""
+"""Text corruption for robustness checks: typos, swaps, dropped letters, keyboard layout."""
 import random
 
 RU = "йцукенгшщзхъфывапролджэячсмитьбю"

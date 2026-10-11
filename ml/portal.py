@@ -248,7 +248,7 @@ class PortalMatcher:
         self.products: dict[str, dict[str, dict[str, int]]] = {}
         self.profiles: dict[str, dict[str, dict]] = {}  # category → product → {chars, names, by_value, flags}
         if not path.exists():
-            return  # словаря нет — уровень «Портал» пропускается, остаётся «новая»
+            return  # no dictionary — the «portal» level is skipped, «new» remains
         data = json.loads(path.read_text(encoding="utf-8"))
         for category, chars in data.items():
             self.products[category] = chars.pop("_products", {})
@@ -357,9 +357,9 @@ def _has_unit(value: str) -> bool:
 
 
 def new_characteristic(segment: str) -> dict:
-    """Фрагмент без места в КТРУ и на Портале — сохраняем как новую характеристику, не выбрасываем."""
+    """A fragment with no place in KTRU or on the portal — kept as a new characteristic, never dropped."""
     text = segment.strip()
-    m = re.match(r"^(.*?)[\s:]+(\d[\d.,]*\s*\S*)$", text)  # «длина кабеля 3 м» → имя + числовое значение
+    m = re.match(r"^(.*?)[\s:]+(\d[\d.,]*\s*\S*)$", text)  # «длина кабеля 3 м» → name + numeric value
     if m and m.group(1):
         return {"name": m.group(1)[:1].upper() + m.group(1)[1:], "value": m.group(2), "unit": None}
     return {"name": text[:1].upper() + text[1:], "value": "Да", "unit": None}
